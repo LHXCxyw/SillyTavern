@@ -170,7 +170,7 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
         }
 
         fs.mkdirSync(contentTarget, { recursive: true });
-        fs.cpSync(contentPath, targetPath, { recursive: true, force: false });
+        copyContentRecursive(contentPath, targetPath);
         setPermissionsSync(targetPath);
         console.info(`Content file ${contentItem.filename} copied to ${contentTarget}`);
         anyContentAdded = true;
@@ -178,6 +178,30 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
 
     writeFileAtomicSync(contentLogPath, contentLog.join('\n'));
     return anyContentAdded;
+}
+
+/**
+ * 递归复制文件或目录。替代 fs.cpSync，避免 Node.js v24 上递归复制目录时的崩溃问题。
+ * @param {string} src 源路径
+ * @param {string} dest 目标路径
+ */
+function copyContentRecursive(src, dest) {
+    const stat = fs.statSync(src);
+    if (stat.isDirectory()) {
+        fs.mkdirSync(dest, { recursive: true });
+        const entries = fs.readdirSync(src, { withFileTypes: true });
+        for (const entry of entries) {
+            const srcPath = path.join(src, entry.name);
+            const destPath = path.join(dest, entry.name);
+            if (entry.isDirectory()) {
+                copyContentRecursive(srcPath, destPath);
+            } else {
+                fs.copyFileSync(srcPath, destPath);
+            }
+        }
+    } else {
+        fs.copyFileSync(src, dest);
+    }
 }
 
 /**

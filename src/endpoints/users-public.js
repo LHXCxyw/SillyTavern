@@ -5,12 +5,17 @@ import express from 'express';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { getIpAddress, retryAfter } from '../express-common.js';
 import { color, Cache, getConfigValue } from '../util.js';
-import { KEY_PREFIX, getUserAvatar, toKey, getPasswordHash, getPasswordSalt, getAccountVersion } from '../users.js';
+import { KEY_PREFIX, getUserAvatar, toKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, ensurePublicDirectoriesExist, getUserDirectories } from '../users.js';
+import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
+import { generateEmailCode, isQQEmail, removeEmailCode, saveEmailCode, sendPasswordResetEmail, sendVerificationEmail, verifyEmailCode } from '../emailVerification.js';
+import { markCardKeyAsUsed, verifyCardKey } from '../cardkeys.js';
 
 const DISCREET_LOGIN = getConfigValue('enableDiscreetLogin', false, 'boolean');
 const PREFER_REAL_IP_HEADER = getConfigValue('rateLimiting.preferRealIpHeader', false, 'boolean');
 const LOGIN_POINTS = getConfigValue('rateLimiting.accountsLoginMaxAttempts', 5, 'number');
 const RECOVER_POINTS = getConfigValue('rateLimiting.accountsRecoverMaxAttempts', 5, 'number');
+const REGISTER_POINTS = getConfigValue('rateLimiting.accountsRegisterMaxAttempts', 5, 'number');
+const VERIFICATION_POINTS = getConfigValue('rateLimiting.accountsVerificationMaxAttempts', 3, 'number');
 const MFA_CACHE = new Cache(5 * 60 * 1000);
 
 const generateRecoveryCode = () => Array.from({ length: 6 }, () => crypto.randomInt(0, 10)).join('');
@@ -22,6 +27,14 @@ const loginLimiter = new RateLimiterMemory({
 });
 const recoverLimiter = new RateLimiterMemory({
     points: RECOVER_POINTS > 0 ? RECOVER_POINTS : Number.MAX_SAFE_INTEGER,
+    duration: 300,
+});
+const registerLimiter = new RateLimiterMemory({
+    points: REGISTER_POINTS > 0 ? REGISTER_POINTS : Number.MAX_SAFE_INTEGER,
+    duration: 300,
+});
+const verificationLimiter = new RateLimiterMemory({
+    points: VERIFICATION_POINTS > 0 ? VERIFICATION_POINTS : Number.MAX_SAFE_INTEGER,
     duration: 300,
 });
 
@@ -62,7 +75,7 @@ router.post('/login', async (request, response) => {
     try {
         if (!request.body.handle) {
             console.warn('Login failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
+            return response.status(400).json({ error: '缺少必要参数' });
         }
 
         const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
@@ -73,17 +86,17 @@ router.post('/login', async (request, response) => {
 
         if (!user) {
             console.error('Login failed: User', request.body.handle, 'not found');
-            return response.status(403).json({ error: 'Incorrect credentials' });
+            return response.status(403).json({ error: '账号或密码错误' });
         }
 
         if (!user.enabled) {
             console.warn('Login failed: User', user.handle, 'is disabled');
-            return response.status(403).json({ error: 'User is disabled' });
+            return response.status(403).json({ error: '该账号已被禁用' });
         }
 
         if (user.password && user.password !== getPasswordHash(request.body.password, user.salt)) {
             console.warn('Login failed: Incorrect password for', user.handle);
-            return response.status(403).json({ error: 'Incorrect credentials' });
+            return response.status(403).json({ error: '账号或密码错误' });
         }
 
         if (!request.session) {
@@ -92,6 +105,9 @@ router.post('/login', async (request, response) => {
         }
 
         await loginLimiter.delete(ip);
+        user.lastLogin = Date.now();
+        user.lastActivity = user.lastLogin;
+        await storage.setItem(toKey(user.handle), user);
         request.session.handle = user.handle;
         request.session.version = getAccountVersion(user);
         console.info('Login successful:', user.handle, 'from', ip, 'at', new Date().toLocaleString());
@@ -99,7 +115,7 @@ router.post('/login', async (request, response) => {
     } catch (error) {
         if (error instanceof RateLimiterRes) {
             console.error('Login failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
-            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or recover your password.' });
+            return retryAfter(response, error).status(429).send({ error: '尝试次数过多，请稍后再试或找回密码' });
         }
 
         console.error('Login failed:', error);
@@ -111,7 +127,7 @@ router.post('/recover-step1', async (request, response) => {
     try {
         if (!request.body.handle) {
             console.warn('Recover step 1 failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
+            return response.status(400).json({ error: '缺少必要参数' });
         }
 
         const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
@@ -122,24 +138,28 @@ router.post('/recover-step1', async (request, response) => {
 
         if (!user) {
             console.error('Recover step 1 failed: User', request.body.handle, 'not found');
-            return response.status(404).json({ error: 'User not found' });
+            return response.status(404).json({ error: '用户不存在' });
         }
 
         if (!user.enabled) {
             console.error('Recover step 1 failed: User', user.handle, 'is disabled');
-            return response.status(403).json({ error: 'User is disabled' });
+            return response.status(403).json({ error: '该账号已被禁用' });
         }
 
         const mfaCode = generateRecoveryCode();
-        console.log();
-        console.log(color.blue(`${user.name}, your password recovery code is: `) + color.magenta(mfaCode));
-        console.log();
+        if (user.email && isQQEmail(user.email)) {
+            await sendPasswordResetEmail(user.email, mfaCode);
+        } else {
+            console.log();
+            console.log(color.blue(`${user.name}, your password recovery code is: `) + color.magenta(mfaCode));
+            console.log();
+        }
         MFA_CACHE.set(user.handle, mfaCode);
         return response.sendStatus(204);
     } catch (error) {
         if (error instanceof RateLimiterRes) {
             console.error('Recover step 1 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
-            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or contact your admin.' });
+            return retryAfter(response, error).status(429).send({ error: '尝试次数过多，请稍后再试或联系管理员' });
         }
 
         console.error('Recover step 1 failed:', error);
@@ -147,11 +167,106 @@ router.post('/recover-step1', async (request, response) => {
     }
 });
 
+router.post('/send-verification', async (request, response) => {
+    try {
+        const email = String(request.body.email ?? '').trim().toLowerCase();
+
+        if (!email) {
+            return response.status(400).json({ error: '缺少邮箱地址' });
+        }
+
+        if (!isQQEmail(email)) {
+            return response.status(400).json({ error: '必须使用QQ邮箱注册' });
+        }
+
+        const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
+        await verificationLimiter.consume(`${ip}:${email}`);
+
+        const code = generateEmailCode();
+        await saveEmailCode(email, code);
+        await sendVerificationEmail(email, code);
+        return response.sendStatus(204);
+    } catch (error) {
+        if (error instanceof RateLimiterRes) {
+            return retryAfter(response, error).status(429).send({ error: '请求过于频繁，请稍后再试' });
+        }
+
+        console.error('Send verification failed:', error);
+        return response.status(500).json({ error: error.message || '验证码发送失败' });
+    }
+});
+
+router.post('/register', async (request, response) => {
+    try {
+        const handle = String(request.body.handle ?? request.body.name ?? '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+        const name = String(request.body.name ?? request.body.handle ?? '').trim();
+        const passwordText = String(request.body.password ?? '');
+        const email = String(request.body.email ?? '').trim().toLowerCase();
+        const verificationCode = String(request.body.verificationCode ?? '').trim();
+        const cardKey = String(request.body.cardKey ?? '').trim().toUpperCase();
+
+        if (!handle || !name || !passwordText || !email || !verificationCode || !cardKey) {
+            return response.status(400).json({ error: '缺少必要参数' });
+        }
+
+        if (!isQQEmail(email)) {
+            return response.status(400).json({ error: '必须使用QQ邮箱注册' });
+        }
+
+        const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
+        await registerLimiter.consume(`${ip}:${email}`);
+
+        const handles = await getAllUserHandles();
+        if (handles.includes(handle)) {
+            return response.status(409).json({ error: '用户已存在' });
+        }
+
+        const emailCodeValid = await verifyEmailCode(email, verificationCode);
+        if (!emailCodeValid) {
+            return response.status(400).json({ error: '验证码错误或已过期' });
+        }
+
+        const cardKeyValid = await verifyCardKey(cardKey);
+        if (!cardKeyValid) {
+            return response.status(400).json({ error: '卡密无效或已被使用' });
+        }
+
+        const salt = getPasswordSalt();
+        const user = {
+            handle,
+            name,
+            created: Date.now(),
+            password: getPasswordHash(passwordText, salt),
+            salt,
+            admin: false,
+            enabled: true,
+            email,
+            lastLogin: null,
+            lastActivity: null,
+        };
+
+        await storage.setItem(toKey(handle), user);
+        await ensurePublicDirectoriesExist();
+        await checkForNewContent([getUserDirectories(handle)], [CONTENT_TYPES.SETTINGS]);
+        await markCardKeyAsUsed(cardKey, handle);
+        await removeEmailCode(email);
+        await registerLimiter.delete(`${ip}:${email}`);
+        return response.json({ handle });
+    } catch (error) {
+        if (error instanceof RateLimiterRes) {
+            return retryAfter(response, error).status(429).send({ error: '注册请求过于频繁，请稍后再试' });
+        }
+
+        console.error('Register failed:', error);
+        return response.status(500).json({ error: error.message || '注册失败' });
+    }
+});
+
 router.post('/recover-step2', async (request, response) => {
     try {
         if (!request.body.handle || !request.body.code) {
             console.warn('Recover step 2 failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
+            return response.status(400).json({ error: '缺少必要参数' });
         }
 
         /** @type {import('../users.js').User} */
@@ -165,12 +280,12 @@ router.post('/recover-step2', async (request, response) => {
 
         if (!user) {
             console.error('Recover step 2 failed: User', request.body.handle, 'not found');
-            return response.status(404).json({ error: 'User not found' });
+            return response.status(404).json({ error: '用户不存在' });
         }
 
         if (!user.enabled) {
             console.warn('Recover step 2 failed: User', user.handle, 'is disabled');
-            return response.status(403).json({ error: 'User is disabled' });
+            return response.status(403).json({ error: '该账号已被禁用' });
         }
 
         const mfaCode = MFA_CACHE.get(user.handle);
@@ -178,7 +293,7 @@ router.post('/recover-step2', async (request, response) => {
         if (request.body.code !== mfaCode) {
             await recoverLimiter.consume(ip);
             console.warn('Recover step 2 failed: Incorrect code');
-            return response.status(403).json({ error: 'Incorrect code' });
+            return response.status(403).json({ error: '验证码错误' });
         }
 
         if (request.body.newPassword) {
@@ -202,7 +317,7 @@ router.post('/recover-step2', async (request, response) => {
     } catch (error) {
         if (error instanceof RateLimiterRes) {
             console.error('Recover step 2 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
-            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or contact your admin.' });
+            return retryAfter(response, error).status(429).send({ error: '尝试次数过多，请稍后再试或联系管理员' });
         }
 
         console.error('Recover step 2 failed:', error);

@@ -78,20 +78,26 @@ async function getCurrentUser() {
 
 /**
  * Get a list of all users.
+ * @param {object} options List options
+ * @param {number} options.page Page number
+ * @param {number} options.pageSize Page size
+ * @param {string} options.search Search keyword
  * @returns {Promise<import('../../src/users.js').UserViewModel[]>} Users
  */
-async function getUsers() {
+async function getUsers({ page = 1, pageSize = 25, search = '' } = {}) {
     try {
         const response = await fetch('/api/users/get', {
             method: 'POST',
-            headers: getRequestHeaders({ omitContentType: true }),
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ page, pageSize, search }),
         });
 
         if (!response.ok) {
             throw new Error('Failed to get users');
         }
 
-        return response.json();
+        const data = await response.json();
+        return Array.isArray(data) ? { items: data, total: data.length, page: 1, pageSize: data.length, totalPages: 1 } : data;
     } catch (error) {
         console.error('Error getting users:', error);
     }
@@ -203,15 +209,15 @@ async function createUser(form, callback) {
     const formData = new FormData(form);
 
     if (!formData.get('handle')) {
-        errors.push('Handle is required');
+        errors.push('用户名不能为空');
     }
 
     if (formData.get('password') !== formData.get('confirm')) {
-        errors.push('Passwords do not match');
+        errors.push('两次输入的密码不一致');
     }
 
     if (errors.length) {
-        toastr.error(errors.join(', '), 'Failed to create user');
+        toastr.error(errors.join('，'), '创建用户失败');
         return;
     }
 
@@ -235,7 +241,7 @@ async function createUser(form, callback) {
 
         if (!response.ok) {
             const data = await response.json();
-            toastr.error(data.error || 'Unknown error', 'Failed to create user');
+            toastr.error(data.error || '未知错误', '创建用户失败');
             throw new Error('Failed to create user');
         }
 
@@ -778,16 +784,31 @@ async function changeAvatar(handle, avatar) {
 }
 
 async function openAdminPanel() {
+    const usersState = {
+        page: 1,
+        pageSize: 25,
+        search: '',
+        totalPages: 1,
+    };
+
     async function renderUsers() {
-        const users = await getUsers();
-        template.find('.usersList').empty();
+        const data = await getUsers(usersState);
+        const users = data?.items ?? [];
+        usersState.page = data?.page ?? usersState.page;
+        usersState.totalPages = data?.totalPages ?? 1;
+        template.find('.usersListItems').empty();
+        template.find('.usersResultSummary').text(`共 ${data?.total ?? 0} 个用户`);
+        template.find('.usersPageInfo').text(`第 ${usersState.page} / ${usersState.totalPages} 页`);
+        template.find('.usersPrevPage').toggleClass('disabled', usersState.page <= 1);
+        template.find('.usersNextPage').toggleClass('disabled', usersState.page >= usersState.totalPages);
         for (const user of users) {
             const userBlock = template.find('.userAccountTemplate .userAccount').clone();
             userBlock.find('.userName').text(user.name);
             userBlock.find('.userHandle').text(user.handle);
-            userBlock.find('.userStatus').text(user.enabled ? 'Enabled' : 'Disabled');
-            userBlock.find('.userRole').text(user.admin ? 'Admin' : 'User');
-            userBlock.find('.avatar img').attr('src', user.avatar);
+            userBlock.find('.userStatus').text(user.enabled ? '已启用' : '已禁用');
+            userBlock.find('.userRole').text(user.admin ? '管理员' : '普通用户');
+            userBlock.find('.userEmail').text(user.email || '未填写');
+            userBlock.find('.avatar img').attr('src', user.avatar || 'img/ai4.png');
             userBlock.find('.hasPassword').toggle(user.password);
             userBlock.find('.noPassword').toggle(!user.password);
             userBlock.find('.userCreated').text(new Date(user.created).toLocaleString());
@@ -820,7 +841,7 @@ async function openAdminPanel() {
                 await changeAvatar(user.handle, '');
                 renderUsers();
             });
-            template.find('.usersList').append(userBlock);
+            template.find('.usersListItems').append(userBlock);
         }
     }
 
@@ -846,11 +867,52 @@ async function openAdminPanel() {
         event.preventDefault();
         createUser(event.target, () => {
             template.find('.manageUsersButton').trigger('click');
+            usersState.page = 1;
             renderUsers();
         });
     });
 
-    callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: 'Close', wide: false, large: false, allowVerticalScrolling: true, allowHorizontalScrolling: false });
+    template.find('.usersSearchButton').on('click', function () {
+        usersState.search = String(template.find('.usersSearch').val() ?? '').trim();
+        usersState.page = 1;
+        renderUsers();
+    });
+
+    template.find('.usersSearch').on('keydown', function (event) {
+        if (event.key !== 'Enter') {
+            return;
+        }
+
+        event.preventDefault();
+        template.find('.usersSearchButton').trigger('click');
+    });
+
+    template.find('.usersClearSearchButton').on('click', function () {
+        template.find('.usersSearch').val('');
+        usersState.search = '';
+        usersState.page = 1;
+        renderUsers();
+    });
+
+    template.find('.usersPrevPage').on('click', function () {
+        if (usersState.page <= 1) {
+            return;
+        }
+
+        usersState.page -= 1;
+        renderUsers();
+    });
+
+    template.find('.usersNextPage').on('click', function () {
+        if (usersState.page >= usersState.totalPages) {
+            return;
+        }
+
+        usersState.page += 1;
+        renderUsers();
+    });
+
+    callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: 'Close', wide: true, large: true, allowVerticalScrolling: true, allowHorizontalScrolling: false });
     renderUsers();
 }
 

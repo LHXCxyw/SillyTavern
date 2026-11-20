@@ -364,6 +364,7 @@ const defaultSettings = {
 
 const writePromptFieldsDebounced = debounce(writePromptFields, debounce_timeout.relaxed);
 const isVideo = (/** @type {string} */ format) => VIDEO_EXTENSIONS.includes(String(format || '').trim().toLowerCase());
+let autoWebuiValidated = false;
 
 /**
  * Generate interceptor for interactive mode triggers.
@@ -606,6 +607,12 @@ function getClosestKnownResolution() {
 }
 
 async function loadSettingOptions() {
+    if (extension_settings.sd.source === sources.auto && !autoWebuiValidated) {
+        return Promise.all([
+            loadComfyWorkflows(),
+        ]);
+    }
+
     return Promise.all([
         loadSamplers(),
         loadModels(),
@@ -1134,6 +1141,7 @@ function onSwapDimensionsClick() {
 
 async function onSourceChange() {
     extension_settings.sd.source = $('#sd_source').find(':selected').val();
+    autoWebuiValidated = false;
     extension_settings.sd.model = null;
     extension_settings.sd.sampler = null;
     extension_settings.sd.scheduler = null;
@@ -1246,11 +1254,13 @@ function onHighResFixInput() {
 
 function onAutoUrlInput() {
     extension_settings.sd.auto_url = $('#sd_auto_url').val();
+    autoWebuiValidated = false;
     saveSettingsDebounced();
 }
 
 function onAutoAuthInput() {
     extension_settings.sd.auto_auth = $('#sd_auto_auth').val();
+    autoWebuiValidated = false;
     saveSettingsDebounced();
 }
 
@@ -1360,6 +1370,7 @@ async function validateAutoUrl() {
             throw new Error('SD WebUI returned an error.');
         }
 
+        autoWebuiValidated = true;
         await loadSettingOptions();
         toastr.success('SD WebUI API connected.');
     } catch (error) {

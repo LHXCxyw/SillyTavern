@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <base href="/">
+    <meta charset="utf-8">
+    <meta name="viewport"
+        content="width=device-width, viewport-fit=cover, initial-scale=1, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="darkreader-lock">
+    <meta name="robots" content="noindex, nofollow" />
+    <style>
+        body {
+            background-color: rgb(36, 36, 37);
+        }
+
+        .custom-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+        }
+
+        .modal-content {
+            background-color: rgb(23 23 23);
+            padding: 20px;
+            border-radius: 5px;
+            text-align: center;
+            max-width: 80%;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-content p strong {
+            margin: 0;
+            color: #ae2f2f;
+        }
+
+        .modal-content h2 {
+            margin-top: 0;
+            color: #ffffff;
+        }
+
+        .modal-content p {
+            margin: 10px 0;
+        }
+
+        .modal-content button {
+            margin: 10px 5px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        #copyButton {
+            background-color: #000000;
+            color: white;
+        }
+
+        #copyButton:hover {
+            background-color: rgb(255 255 255 / 30%);
+        }
+
+        #confirmButton {
+            background-color: #000000;
+            color: white;
+        }
+
+        #confirmButton:hover {
+            background-color: rgb(255 255 255 / 30%);
+        }
+
+        footer {
+            position: relative;
+            margin-top: 20px;
+            padding: 10px;
+            background-color: rgba(255, 255, 255, 0.1);
+            z-index: 99999;
+        }
+
+        .contact-link {
+            color: #ffffff;
+            text-decoration: none;
+            font-size: 24px;
+        }
+
+        .contact-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+    <link rel="preload" as="style" href="style.css">
+    <link rel="apple-touch-icon" sizes="57x57" href="img/apple-icon-57x57.png" />
+    <link rel="apple-touch-icon" sizes="72x72" href="img/apple-icon-72x72.png" />
+    <link rel="apple-touch-icon" sizes="114x114" href="img/apple-icon-114x114.png" />
+    <link rel="apple-touch-icon" sizes="144x144" href="img/apple-icon-144x144.png" />
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" type="text/css" href="style.css">
+    <link rel="stylesheet" type="text/css" href="css/st-tailwind.css">
+    <link rel="stylesheet" type="text/css" href="css/register.css">
+    <link rel="manifest" crossorigin="use-credentials" href="manifest.json">
+    <link href="webfonts/NotoSans/stylesheet.css" rel="stylesheet">
+    <link href="webfonts/NotoSansMono/stylesheet.css" rel="stylesheet">
+    <!-- fontawesome webfonts-->
+    <link href="css/fontawesome.min.css" rel="stylesheet">
+    <link href="css/solid.min.css" rel="stylesheet">
+    <link href="css/user.css" rel="stylesheet">
+    <script src="scripts/register.js"></script>
+    <title>咸鱼傻酒馆 - 注册</title>
+</head>
+
+<body class="register">
+    <div id="shadow_popup" style="opacity: 1;">
+        <div id="dialogue_popup">
+            <div id="dialogue_popup_holder">
+                <div id="dialogue_popup_text">
+                    <div id="userRegisterBlock" class="flex-container flexFlowColumn alignItemsCenter">
+                        <h2 id="logoBlock" class="flex-container">
+                            <img src="img/logo.png" alt="咸鱼傻酒馆" class="logo">
+                            <span>注册 咸鱼傻酒馆</span>
+                        </h2>
+                        <h3 id="registerPrompt">
+                            创建新账户
+                        </h3>
+                        <div id="registerFormBlock" class="wide100p">
+                            <form class="flex-container flexFlowColumn flexGap10 userCreateForm" target="_blank"
+                                rel="noopener">
+                                <div class="auth-field">
+                                    <label>显示名称：</label>
+                                    <span class="warning">必填</span>
+                                    <input autocomplete="username" placeholder="例如：张三" type="text"
+                                        class="createUserDisplayName text_pole" name="_name">
+                                </div>
+                                <div class="auth-field">
+                                    <label>账号名：</label>
+                                    <span class="warning">仅限小写字母、数字和-号</span>
+                                    <input pattern="[a-z0-9-]+" type="text" placeholder="例如：zhang-san（仅限小写字母、数字和-号）"
+                                        class="createUserHandle text_pole" name="handle">
+                                </div>
+                                <div class="auth-field">
+                                    <label>密码：</label>
+                                    <span class="warning">必填</span>
+                                    <input autocomplete="new-password" placeholder="密码" type="password"
+                                        class="createUserPassword text_pole" name="password">
+                                </div>
+                                <div class="auth-field">
+                                    <label>确认密码：</label>
+                                    <span class="warning">必填</span>
+                                    <input autocomplete="new-password" placeholder="确认密码" type="password"
+                                        class="createUserConfirmPassword text_pole" name="confirm">
+                                </div>
+                                <div class="auth-field">
+                                    <label>邮箱：</label>
+                                    <span class="warning">仅限QQ邮箱</span>
+                                    <input type="email" placeholder="例如：12345678@qq.com"
+                                        class="createUserEmail text_pole" name="email" required
+                                        pattern="[1-9][0-9]{4,}@qq\.com">
+                                </div>
+                                <div class="auth-field auth-field-with-button">
+                                    <label>验证码：</label>
+                                    <span class="warning">必填</span>
+                                    <input type="text" placeholder="请输入验证码" class="createUserVerificationCode text_pole"
+                                        name="verificationCode" required>
+                                    <button type="button" class="menu_button" id="sendVerificationCode">发送验证码</button>
+                                </div>
+                                <div class="auth-field auth-field-with-button">
+                                    <label>卡密：</label>
+                                    <span class="warning">必填，当前注册用户过多，请加群获取卡密注册</span>
+                                    <input type="text" placeholder="请输入注册卡密" class="createUserCardKey text_pole"
+                                        name="cardKey" required>
+                                    <button type="button" class="menu_button" id="verifyCardKey">验证卡密</button>
+                                </div>
+                                <div class="auth-actions">
+                                    <button
+                                        class="menu_button menu_button_icon newUserRegisterFinalizeButton interactable"
+                                        type="submit" tabindex="0">
+                                        <i class="fa-fw fa-solid fa-user-plus"></i>
+                                        <span>创建</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="neutral_warning" id="errorMessage">
+                        </div>
+                        <div class="auth-actions">
+                            <div id="backToLoginButton" class="menu_button" onclick="window.location.href='login.html'">
+                                返回登录</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <footer class="flex-container justifySpaceEvenly alignItemsCenter">
+        <a class="contact-link">
+            <i class="fas fa-users"></i> 酒馆交流群：745442628
+        </a>
+        <a class="contact-link">
+            <i class="fas fa-user-edit"></i> 作者QQ： 2053029583
+        </a>
+    </footer>
+</body>
+
+</html>

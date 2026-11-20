@@ -4,7 +4,8 @@
 <head>
     <base href="/">
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, viewport-fit=cover, initial-scale=1, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+    <meta name="viewport"
+        content="width=device-width, viewport-fit=cover, initial-scale=1, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="darkreader-lock">
@@ -31,7 +32,7 @@
     <link href="css/fontawesome.min.css" rel="stylesheet">
     <link href="css/solid.min.css" rel="stylesheet">
     <link href="css/user.css" rel="stylesheet">
-    <title>SillyTavern</title>
+    <title>咸鱼傻酒馆</title>
 </head>
 
 <body class="login">
@@ -41,37 +42,43 @@
                 <div id="dialogue_popup_text">
                     <div id="userSelectBlock" class="flex-container flexFlowColumn alignItemsCenter">
                         <h2 id="logoBlock" class="flex-container">
-                            <img src="img/logo.png" alt="SillyTavern" class="logo">
-                            <span>Welcome to SillyTavern</span>
+                            <img src="img/logo.png" alt="咸鱼傻酒馆" class="logo">
+                            <span>欢迎来到咸鱼傻酒馆</span>
                         </h2>
                         <h3 id="normalLoginPrompt">
-                            Select an Account
+                            选择账户
                         </h3>
                         <h3 id="discreetLoginPrompt">
-                            Enter Login Details
+                            输入登录信息
                         </h3>
                         <div id="userListBlock" class="wide100p">
                             <div id="userList" class="flex-container justifySpaceEvenly"></div>
-                            <div id="handleEntryBlock" style="display:none;" class="flex-container flexFlowColumn alignItemsCenter">
-                                <input id="userHandle" class="text_pole" type="text" placeholder="User handle" autocomplete="username">
+                            <div id="handleEntryBlock" style="display:none;"
+                                class="flex-container flexFlowColumn alignItemsCenter">
+                                <input id="userHandle" class="text_pole" type="text" placeholder="账号名"
+                                    autocomplete="username">
                             </div>
                             <div id="passwordEntryBlock" style="display:none;"
                                 class="flex-container flexFlowColumn alignItemsCenter">
-                                <input id="userPassword" class="text_pole" type="password" placeholder="Password" autocomplete="current-password">
-                                <a id="recoverPassword" href="#" onclick="return false;">Forgot password?</a>
-                                <div class="flex-container">
-                                    <div id="loginButton" class="menu_button">Login</div>
+                                <input id="userPassword" class="text_pole" type="password" placeholder="密码"
+                                    autocomplete="current-password">
+                                <a id="recoverPassword" href="#" onclick="return false;">忘记密码？</a>
+                                <div class="auth-actions">
+                                    <div id="loginButton" class="menu_button">登录</div>
+                                    <a class="menu_button" href="/register">注册账号</a>
                                 </div>
                             </div>
-                            <div id="passwordRecoveryBlock" style="display:none;" class="flex-container flexFlowColumn alignItemsCenter">
+                            <div id="passwordRecoveryBlock" style="display:none;"
+                                class="flex-container flexFlowColumn alignItemsCenter">
                                 <div id="recoverMessage">
-                                    Recovery code has been posted to the server console.
+                                    密码恢复验证码已发送到绑定邮箱。如未绑定邮箱，请联系管理员。
                                 </div>
-                                <input id="recoveryCode" class="text_pole" type="text" placeholder="Recovery code">
-                                <input id="newPassword" class="text_pole" type="password" placeholder="New password" autocomplete="new-password">
+                                <input id="recoveryCode" class="text_pole" type="text" placeholder="恢复验证码">
+                                <input id="newPassword" class="text_pole" type="password" placeholder="新密码"
+                                    autocomplete="new-password">
                                 <div class="flex-container flexGap10">
-                                    <div id="sendRecovery" class="menu_button">Send</div>
-                                    <div id="cancelRecovery" class="menu_button">Cancel</div>
+                                    <div id="sendRecovery" class="menu_button">提交</div>
+                                    <div id="cancelRecovery" class="menu_button">取消</div>
                                 </div>
                             </div>
                         </div>

@@ -3,3 +3,69 @@
     padding: 5px 10px;
     border-radius: 5px;
 }
+
+.adminTabs .adminNav,
+.adminTabs .usersToolbar,
+.adminTabs .usersMeta,
+.adminTabs .usersPagination {
+    flex-wrap: wrap;
+}
+
+.adminTabs .menu_button,
+.adminTabs button.menu_button,
+.adminTabs .right_menu_button {
+    writing-mode: horizontal-tb;
+    white-space: nowrap;
+    word-break: keep-all;
+    flex-shrink: 0;
+}
+
+.adminTabs .adminNav .menu_button {
+    min-width: 120px;
+    padding: 6px 12px;
+}
+
+.adminTabs .adminNav h4 {
+    margin: 0;
+    writing-mode: horizontal-tb;
+    white-space: nowrap;
+    word-break: keep-all;
+}
+
+.adminTabs .usersSearch {
+    min-width: 240px;
+    flex: 1 1 260px;
+}
+
+.adminTabs .usersToolbar .menu_button,
+.adminTabs .usersPagination .menu_button,
+.adminTabs .newUserRegisterFinalizeButton {
+    min-width: 72px;
+    padding: 6px 12px;
+}
+
+.adminTabs .userAccount {
+    flex-wrap: wrap;
+}
+
+.adminTabs .userAccount > .flex1 {
+    min-width: 260px;
+}
+
+.adminTabs .userAccount .userEmail {
+    overflow-wrap: anywhere;
+}
+
+.adminTabs .userCreateForm > .flex-container {
+    align-items: center;
+    gap: 6px;
+}
+
+.adminTabs .userCreateForm > .flex-container > span:first-child {
+    min-width: 86px;
+    white-space: nowrap;
+}
+
+.adminTabs .userCreateForm input.text_pole {
+    flex: 1 1 260px;
+}

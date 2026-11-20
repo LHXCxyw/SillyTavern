@@ -31,7 +31,7 @@ async function getUserList() {
 
     if (!response.ok) {
         const errorData = await response.json();
-        return displayError(errorData.error || 'An error occurred');
+        return displayError(errorData.error || '发生错误，请稍后再试');
     }
 
     if (response.status === 204) {
@@ -61,7 +61,7 @@ async function sendRecoveryPart1(handle) {
 
     if (!response.ok) {
         const errorData = await response.json();
-        return displayError(errorData.error || 'An error occurred');
+        return displayError(errorData.error || '发送恢复验证码失败');
     }
 
     showRecoveryBlock();
@@ -92,10 +92,10 @@ async function sendRecoveryPart2(handle, code, newPassword) {
 
     if (!response.ok) {
         const errorData = await response.json();
-        return displayError(errorData.error || 'An error occurred');
+        return displayError(errorData.error || '重置密码失败');
     }
 
-    console.log(`Successfully recovered password for ${handle}!`);
+    console.log(`已成功为 ${handle} 重置密码`);
     await performLogin(handle, newPassword);
 }
 
@@ -123,17 +123,17 @@ async function performLogin(handle, password) {
 
         if (!response.ok) {
             const errorData = await response.json();
-            return displayError(errorData.error || 'An error occurred');
+            return displayError(errorData.error || '登录失败，请检查账号和密码');
         }
 
         const data = await response.json();
 
         if (data.handle) {
-            console.log(`Successfully logged in as ${handle}!`);
+            console.log(`已登录为 ${handle}`);
             redirectToHome();
         }
     } catch (error) {
-        console.error('Error logging in:', error);
+        console.error('登录出错:', error);
         displayError(String(error));
     }
 }
@@ -174,7 +174,30 @@ async function onUserSelected(user) {
  * @param {string} message Error message
  */
 function displayError(message) {
-    $('#errorMessage').text(message);
+    $('#errorMessage').text(localizeError(message));
+}
+
+function localizeError(message) {
+    const dictionary = {
+        'Missing required fields': '缺少必要参数',
+        'Incorrect credentials': '账号或密码错误',
+        'User is disabled': '该账号已被禁用',
+        'User not found': '用户不存在',
+        'Too many attempts. Try again later or recover your password.': '尝试次数过多，请稍后再试或找回密码',
+        'Too many attempts. Try again later or contact your admin.': '尝试次数过多，请稍后再试或联系管理员',
+        'Incorrect code': '验证码错误',
+        'ForbiddenError: Invalid CSRF token. Please refresh the page and try again.': '页面安全令牌已失效，请刷新页面后重试',
+    };
+
+    if (dictionary[message]) {
+        return dictionary[message];
+    }
+
+    if (String(message).includes('Invalid CSRF token')) {
+        return '页面安全令牌已失效，请刷新页面后重试';
+    }
+
+    return message;
 }
 
 /**

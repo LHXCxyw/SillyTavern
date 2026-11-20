@@ -74,6 +74,7 @@ import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } fro
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
+import { publicRouter as cardkeysPublicRouter } from './endpoints/cardkeys.js';
 
 // Work around a node v20.0.0, v20.1.0, and v20.2.0 bug. The issue was fixed in v20.3.0.
 // https://github.com/nodejs/node/issues/47822#issuecomment-1564708870
@@ -221,6 +222,18 @@ app.get('/', cacheBuster.middleware, (request, response) => {
     return response.sendFile('index.html', { root: path.join(serverDirectory, 'public') });
 });
 
+app.get('/register', cacheBuster.middleware, (_request, response) => {
+    return response.sendFile('register.html', { root: path.join(serverDirectory, 'public') });
+});
+
+app.get('/cardkeys', cacheBuster.middleware, (request, response) => {
+    if (shouldRedirectToLogin(request)) {
+        return response.redirect('/login');
+    }
+
+    return response.sendFile('cardkeys.html', { root: path.join(serverDirectory, 'public') });
+});
+
 // Callback endpoint for OAuth PKCE flows (e.g. OpenRouter)
 app.get('/callback/:source?', (request, response) => {
     const source = request.params.source;
@@ -243,6 +256,7 @@ app.use(express.static(path.join(serverDirectory, 'public'), {}));
 
 // Public API
 app.use('/api/users', usersPublicRouter);
+app.use('/api/cardkeys-public', cardkeysPublicRouter);
 
 // Everything below this line requires authentication
 app.use(requireLoginMiddleware);

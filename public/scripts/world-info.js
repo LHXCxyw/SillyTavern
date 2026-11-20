@@ -4152,11 +4152,18 @@ async function _save(name, data) {
     // Prevent double saving if both immediate and debounced save are called
     cancelDebounce(saveWorldDebounced);
 
-    await fetch('/api/worldinfo/edit', {
+    const response = await fetch('/api/worldinfo/edit', {
         method: 'POST',
         headers: getRequestHeaders(),
         body: JSON.stringify({ name: name, data: data }),
     });
+
+    // 校验 HTTP 状态码，避免服务器返回 403/500 时前端误报保存成功
+    if (!response.ok) {
+        toastr.error(t`World info save failed (HTTP ${response.status}). Check server/WAF logs.`);
+        throw new Error(`World info save failed: HTTP ${response.status}`);
+    }
+
     await eventSource.emit(event_types.WORLDINFO_UPDATED, name, data);
 }
 

@@ -3,6 +3,23 @@ body.login #shadow_popup {
     display: flex;
 }
 
+body.login {
+    background-color: rgb(36, 36, 37);
+    background-image: url(https://qpay-onestroke-redpack-1251316161.cos.ap-guangzhou.myqcloud.com/664720315b5ee5a161c61f671fefce6d.png?imageMogr2/thumbnail/!50p);
+    background-position: center center;
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-attachment: fixed;
+}
+
+body.login #dialogue_popup {
+    width: min(92vw, 760px);
+}
+
+body.login #dialogue_popup_text {
+    padding: 28px 24px;
+}
+
 body.login .logo {
     max-width: 30px;
 }
@@ -11,6 +28,12 @@ body.login #logoBlock {
     align-items: center;
     margin: 0 auto;
     gap: 10px;
+    justify-content: center;
+    text-align: center;
+}
+
+body.login #logoBlock span {
+    line-height: 1.2;
 }
 
 body.login .userSelect {
@@ -47,4 +70,53 @@ body.login #handleEntryBlock,
 body.login #passwordEntryBlock,
 body.login #passwordRecoveryBlock {
     margin: 2px;
+    width: 100%;
+    gap: 14px;
+}
+
+body.login .text_pole {
+    width: 100%;
+    max-width: 700px;
+    box-sizing: border-box;
+}
+
+body.login .auth-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    margin-top: 8px;
+}
+
+body.login .auth-actions .menu_button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 120px;
+    width: auto;
+    white-space: nowrap;
+    line-height: 1.2;
+    text-align: center;
+    text-decoration: none;
+    writing-mode: horizontal-tb;
+}
+
+@media screen and (max-width: 600px) {
+    body.login #dialogue_popup_text {
+        padding: 22px 14px;
+    }
+
+    body.login #logoBlock {
+        font-size: 1.4rem;
+    }
+
+    body.login .auth-actions {
+        flex-direction: column;
+    }
+
+    body.login .auth-actions .menu_button {
+        width: min(100%, 240px);
+    }
 }

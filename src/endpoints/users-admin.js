@@ -33,30 +33,64 @@ function slugify(text) {
     return lodash.deburr(String(text ?? '').toLowerCase().trim()).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-router.post('/get', requireAdminMiddleware, async (_request, response) => {
+router.post('/get', requireAdminMiddleware, async (request, response) => {
     try {
+        const page = Math.max(Number(request.body?.page) || 1, 1);
+        const pageSize = Math.min(Math.max(Number(request.body?.pageSize) || 25, 1), 100);
+        const search = String(request.body?.search ?? '').trim().toLowerCase();
+        const includeAvatars = Boolean(request.body?.includeAvatars);
+
         /** @type {import('../users.js').User[]} */
         const users = await storage.values(x => x.key.startsWith(KEY_PREFIX));
+        const filteredUsers = users
+            .filter(user => {
+                if (!search) {
+                    return true;
+                }
+
+                return [user.handle, user.name, user.email]
+                    .some(value => String(value ?? '').toLowerCase().includes(search));
+            })
+            .sort((x, y) => (x.created ?? 0) - (y.created ?? 0));
+
+        const total = filteredUsers.length;
+        const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+        const safePage = Math.min(page, totalPages);
+        const start = (safePage - 1) * pageSize;
+        const pageUsers = filteredUsers.slice(start, start + pageSize);
 
         /** @type {Promise<import('../users.js').UserViewModel>[]} */
-        const viewModelPromises = users
+        const viewModelPromises = pageUsers
             .map(user => new Promise(resolve => {
-                getUserAvatar(user.handle).then(avatar =>
+                const resolveUser = avatar =>
                     resolve({
                         handle: user.handle,
                         name: user.name,
-                        avatar: avatar,
+                        avatar: avatar || 'img/ai4.png',
                         admin: user.admin,
                         enabled: user.enabled,
                         created: user.created,
                         password: !!user.password,
-                    }),
-                );
+                        email: user.email,
+                        lastLogin: user.lastLogin,
+                        lastActivity: user.lastActivity,
+                    });
+
+                if (includeAvatars) {
+                    getUserAvatar(user.handle).then(resolveUser);
+                } else {
+                    resolveUser('img/ai4.png');
+                }
             }));
 
         const viewModels = await Promise.all(viewModelPromises);
-        viewModels.sort((x, y) => (x.created ?? 0) - (y.created ?? 0));
-        return response.json(viewModels);
+        return response.json({
+            items: viewModels,
+            total,
+            page: safePage,
+            pageSize,
+            totalPages,
+        });
     } catch (error) {
         console.error('User list failed:', error);
         return response.sendStatus(500);
@@ -200,6 +234,7 @@ router.post('/create', requireAdminMiddleware, async (request, response) => {
             salt: salt,
             admin: !!request.body.admin,
             enabled: true,
+            email: request.body.email || '',
         };
 
         await storage.setItem(toKey(handle), newUser);
@@ -267,6 +302,38 @@ router.post('/slugify', requireAdminMiddleware, async (request, response) => {
         return response.send(text);
     } catch (error) {
         console.error('Slugify failed:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/change-password-admin', requireAdminMiddleware, async (request, response) => {
+    try {
+        if (!request.body.handle) {
+            console.warn('Admin password change failed: Missing required fields');
+            return response.status(400).json({ error: 'Missing required fields' });
+        }
+
+        /** @type {import('../users.js').User} */
+        const user = await storage.getItem(toKey(request.body.handle));
+
+        if (!user) {
+            console.error('Admin password change failed: User not found');
+            return response.status(404).json({ error: 'User not found' });
+        }
+
+        if (request.body.password) {
+            const salt = getPasswordSalt();
+            user.password = getPasswordHash(request.body.password, salt);
+            user.salt = salt;
+        } else {
+            user.password = '';
+            user.salt = '';
+        }
+
+        await storage.setItem(toKey(user.handle), user);
+        return response.sendStatus(204);
+    } catch (error) {
+        console.error('Admin password change failed:', error);
         return response.sendStatus(500);
     }
 });

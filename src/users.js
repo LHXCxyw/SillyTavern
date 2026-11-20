@@ -58,6 +58,9 @@ const STORAGE_KEYS = {
  * @property {string} salt - Salt used for hashing the password
  * @property {boolean} enabled - Whether the user is enabled
  * @property {boolean} admin - Whether the user is an admin (can manage other users)
+ * @property {string} [email] - The user's email address
+ * @property {number} [lastLogin] - The timestamp of the user's last login
+ * @property {number} [lastActivity] - The timestamp of the user's last activity
  */
 
 /**
@@ -69,6 +72,9 @@ const STORAGE_KEYS = {
  * @property {boolean} password - Whether the user is password protected
  * @property {boolean} [enabled] - Whether the user is enabled
  * @property {number} [created] - The timestamp when the user was created
+ * @property {string} [email] - The user's email address
+ * @property {number} [lastLogin] - The timestamp of the user's last login
+ * @property {number} [lastActivity] - The timestamp of the user's last activity
  */
 
 /**

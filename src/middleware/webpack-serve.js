@@ -38,12 +38,41 @@ export default function getWebpackServeMiddleware() {
         const compiler = webpack(publicLibConfig);
 
         return new Promise((resolve) => {
-            compiler.run((_error, stats) => {
-                const output = stats?.toString(publicLibConfig.stats);
-                if (output) {
-                    console.log(output);
-                    console.log();
+            compiler.run((error, stats) => {
+                // #region debug-point webpack-error-detail
+                // 捕获并输出编译错误（之前 _error 被忽略，导致丢失关键诊断信息）
+                if (error) {
+                    console.error('========== WEBPACK COMPILE ERROR ==========');
+                    console.error(error);
+                    console.error('============================================');
                 }
+                if (stats) {
+                    const output = stats.toString(publicLibConfig.stats);
+                    if (output) {
+                        console.log(output);
+                        console.log();
+                    }
+                    // 当有编译错误时，输出详细信息以定位具体出错的模块
+                    if (stats.hasErrors()) {
+                        console.error('========== DETAILED WEBPACK ERRORS ==========');
+                        const detailedOutput = stats.toString({
+                            preset: 'detailed',
+                            colors: false,
+                            errors: true,
+                            warnings: false,
+                            modules: true,
+                            reasons: true,
+                            usedExports: true,
+                            providedExports: true,
+                        });
+                        console.error(detailedOutput);
+                        const statsJson = stats.toJson({ preset: 'detailed', errors: true });
+                        console.error('========== ERRORS JSON ==========');
+                        console.error(JSON.stringify(statsJson.errors, null, 2));
+                        console.error('==============================================');
+                    }
+                }
+                // #endregion debug-point webpack-error-detail
                 compiler.close(() => {
                     resolve();
                 });

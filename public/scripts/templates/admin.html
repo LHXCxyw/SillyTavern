@@ -1,23 +1,23 @@
 <div class="adminTabs wide100p">
     <nav class="adminNav flex-container alignItemsCenter justifyCenter">
         <button type="button" class="manageUsersButton menu_button menu_button_icon" data-target-tab="usersList">
-            <h4 data-i18n="Manager Users">Manage Users</h4>
+            <h4>管理用户</h4>
         </button>
         <button type="button" class="newUserButton menu_button menu_button_icon" data-target-tab="registerNewUserBlock">
-            <h4 data-i18n="New User">New User</h4>
+            <h4>新增用户</h4>
         </button>
     </nav>
     <div class="userAccountTemplate template_element">
         <div class="flex-container userAccount alignItemsCenter flexGap10">
             <div class="flex-container flexFlowColumn alignItemsCenter flexNoGap">
-                <div class="avatar" title="If a custom avatar is not set, the user's default persona image will be displayed.">
-                    <img src="img/ai4.png" alt="avatar">
+                <div class="avatar" title="用户头像">
+                    <img src="img/ai4.png" alt="用户头像">
                 </div>
                 <div class="flex-container alignItemsCenter">
-                    <div class="userAvatarChange right_menu_button" title="Set a custom avatar.">
+                    <div class="userAvatarChange right_menu_button" title="设置自定义头像">
                         <i class="fa-fw fa-solid fa-image"></i>
                     </div>
-                    <div class="userAvatarRemove right_menu_button" title="Remove a custom avatar.">
+                    <div class="userAvatarRemove right_menu_button" title="移除自定义头像">
                         <i class="fa-fw fa-solid fa-trash"></i>
                     </div>
                 </div>
@@ -34,45 +34,49 @@
                 </div>
                 <div class="flex-container flexFlowColumn flexNoGap">
                     <span>
-                        <span data-i18n="Role:">Role:</span>
+                        <span>角色：</span>
                         <span class="userRole"></span>
                     </span>
                     <span>
-                        <span data-i18n="Status:">Status:</span>
+                        <span>状态：</span>
                         <span class="userStatus">&nbsp;</span>
                     </span>
                     <span>
-                        <span data-i18n="Created:">Created:</span>
+                        <span>邮箱：</span>
+                        <span class="userEmail">&nbsp;</span>
+                    </span>
+                    <span>
+                        <span>创建时间：</span>
                         <span class="userCreated">&nbsp;</span>
                     </span>
                 </div>
             </div>
             <div class="flex-container flexFlowColumn">
                 <div class="flex-container">
-                    <div class="userChangeNameButton menu_button" title="Change user display name.">
+                    <div class="userChangeNameButton menu_button" title="修改显示名称">
                         <i class="fa-fw fa-solid fa-pencil"></i>
                     </div>
-                    <div class="userEnableButton menu_button" title="Enable user account.">
+                    <div class="userEnableButton menu_button" title="启用账号">
                         <i class="fa-fw fa-solid fa-check"></i>
                     </div>
-                    <div class="userDisableButton menu_button" title="Disable user account.">
+                    <div class="userDisableButton menu_button" title="禁用账号">
                         <i class="fa-fw fa-solid fa-ban"></i>
                     </div>
-                    <div class="userPromoteButton menu_button" title="Promote user to admin.">
+                    <div class="userPromoteButton menu_button" title="提升为管理员">
                         <i class="fa-fw fa-solid fa-arrow-up"></i>
                     </div>
-                    <div class="userDemoteButton menu_button" title="Demote user to regular user.">
+                    <div class="userDemoteButton menu_button" title="降级为普通用户">
                         <i class="fa-fw fa-solid fa-arrow-down"></i>
                     </div>
                 </div>
                 <div class="flex-container">
-                    <div class="userBackupButton menu_button menu_button_icon" title="Download a backup of user data.">
+                    <div class="userBackupButton menu_button menu_button_icon" title="下载用户数据备份">
                         <i class="fa-fw fa-solid fa-download"></i>
                     </div>
-                    <div class="userChangePasswordButton menu_button" title="Change user password.">
+                    <div class="userChangePasswordButton menu_button" title="修改用户密码">
                         <i class="fa-fw fa-solid fa-key"></i>
                     </div>
-                    <div class="userDelete menu_button warning" title="Delete user account.">
+                    <div class="userDelete menu_button warning" title="删除用户账号">
                         <i class="fa-fw fa-solid fa-trash"></i>
                     </div>
                 </div>
@@ -80,34 +84,50 @@
         </div>
     </div>
     <div class="navTab usersList flex-container flexFlowColumn">
+        <div class="usersToolbar flex-container flexGap10 alignItemsCenter">
+            <input class="usersSearch text_pole" type="search" placeholder="搜索显示名、用户名或邮箱">
+            <button type="button" class="usersSearchButton menu_button">搜索</button>
+            <button type="button" class="usersClearSearchButton menu_button">清空</button>
+        </div>
+        <div class="usersMeta flex-container justifySpaceBetween alignItemsCenter">
+            <span class="usersResultSummary">&nbsp;</span>
+            <div class="usersPagination flex-container flexGap10 alignItemsCenter">
+                <button type="button" class="usersPrevPage menu_button">上一页</button>
+                <span class="usersPageInfo">&nbsp;</span>
+                <button type="button" class="usersNextPage menu_button">下一页</button>
+            </div>
+        </div>
+        <div class="usersListItems flex-container flexFlowColumn"></div>
     </div>
     <div class="navTab registerNewUserBlock" style="display: none;">
         <form class="flex-container flexFlowColumn flexGap10 userCreateForm" action="javascript:void(0);">
             <div class="flex-container flexNoGap">
-                <span data-i18n="Display Name:">Display Name:</span>
+                <span>显示名称：</span>
                 <span class="warning">*</span>
-                <input name="_name" class="createUserDisplayName text_pole" type="text" placeholder="e.g. John Snow" autocomplete="username">
+                <input name="_name" class="createUserDisplayName text_pole" type="text" placeholder="例如：张三" autocomplete="username">
             </div>
             <div class="flex-container flexNoGap">
-                <span data-i18n="User Handle:">User Handle:</span>
+                <span>用户名：</span>
                 <span class="warning">*</span>
-                <input name="handle" class="createUserHandle text_pole" placeholder="e.g. john-snow (lowercase letters, numbers, and dashes only)" type="text" pattern="[a-z0-9-]+">
+                <input name="handle" class="createUserHandle text_pole" placeholder="例如：zhang-san（仅限小写字母、数字和-号）" type="text" pattern="[a-z0-9-]+">
             </div>
             <div class="flex-container flexNoGap">
-                <span data-i18n="Password:">Password:</span>
-                <input name="password" class="createUserPassword text_pole" type="password" placeholder="[ No password ]" autocomplete="new-password">
+                <span>邮箱：</span>
+                <input name="email" class="createUserEmail text_pole" type="email" placeholder="例如：12345678@qq.com" autocomplete="email">
             </div>
             <div class="flex-container flexNoGap">
-                <span data-i18n="Confirm Password:">Confirm Password:</span>
-                <input name="confirm" class="createUserConfirmPassword text_pole" type="password" placeholder="[ No password ]" autocomplete="new-password">
+                <span>密码：</span>
+                <input name="password" class="createUserPassword text_pole" type="password" placeholder="不填写则无密码" autocomplete="new-password">
             </div>
-            <span data-i18n="This will create a new subfolder...">
-                This will create a new subfolder in the /data/ directory with the user's handle as the folder name.
-            </span>
+            <div class="flex-container flexNoGap">
+                <span>确认密码：</span>
+                <input name="confirm" class="createUserConfirmPassword text_pole" type="password" placeholder="不填写则无密码" autocomplete="new-password">
+            </div>
+            <span>系统会在 data 目录下用用户名创建对应用户数据目录。</span>
             <div class="flex-container justifyCenter">
                 <button type="submit" class="menu_button menu_button_icon newUserRegisterFinalizeButton">
                     <i class="fa-fw fa-solid fa-user-plus"></i>
-                    <span data-i18n="Create">Create</span>
+                    <span>创建</span>
                 </button>
             </div>
         </form>

@@ -1,0 +1,96 @@
+name: 云升级验证
+
+on:
+  push:
+    branches: ['verify/sillytavern-1.19.1']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Node 24 云升级验证 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: 配置 Node 24
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tests/package-lock.json
+
+      - name: 安装依赖
+        run: |
+          npm ci --ignore-scripts
+          npm ci --ignore-scripts --prefix tests
+
+      - name: 运行隔离冒烟测试
+        run: node tests/cloud-upgrade-smoke.mjs
+
+      - name: 检查代码风格
+        run: npm run lint
+
+      - name: 运行单元测试
+        run: npm run test:unit --prefix tests -- --runInBand
+
+  container:
+    name: Linux 容器构建与启动
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: 构建候选镜像并检查 Node 版本
+        run: |
+          docker build --tag sillytavern-upgrade-verify .
+          docker run --rm --network none --entrypoint node sillytavern-upgrade-verify --version | grep -E '^v24\.'
+
+      - name: 在隔离容器中冷启动
+        run: |
+          docker run -d --name st-upgrade-verify --network none \
+            -e SILLYTAVERN_ENABLEUSERACCOUNTS=true \
+            sillytavern-upgrade-verify --no-browserLaunchEnabled
+          for attempt in $(seq 1 30); do
+            if docker exec st-upgrade-verify node -e '
+              const assert = require("node:assert/strict");
+              (async () => {
+                for (const route of ["/login", "/register", "/lib.js", "/csrf-token"]) {
+                  const response = await fetch(`http://127.0.0.1:8000${route}`, { redirect: "manual", signal: AbortSignal.timeout(3000) });
+                  if (route === "/login" && response.status === 302) continue;
+                  assert.equal(response.status, 200, route);
+                  if (route === "/lib.js") assert.match(await response.text(), /\bas createLucideIcon\b/);
+                  else if (route === "/csrf-token") assert.notEqual((await response.json()).token, "disabled");
+                  else await response.body.cancel();
+                }
+              })().catch(error => { console.error(error); process.exitCode = 1; });
+            '; then
+              exit 0
+            fi
+            test "$(docker inspect --format '{{.State.Running}}' st-upgrade-verify)" = true || break
+            sleep 2
+          done
+          exit 1
+
+      - name: 输出失败日志
+        if: failure()
+        run: docker logs st-upgrade-verify
+
+      - name: 清理验收容器
+        if: always()
+        run: docker rm -f st-upgrade-verify || true

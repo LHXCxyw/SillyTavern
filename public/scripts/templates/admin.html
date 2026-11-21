@@ -1,135 +1,117 @@
-<div class="adminTabs wide100p">
-    <nav class="adminNav flex-container alignItemsCenter justifyCenter">
-        <button type="button" class="manageUsersButton menu_button menu_button_icon" data-target-tab="usersList">
-            <h4>管理用户</h4>
-        </button>
-        <button type="button" class="newUserButton menu_button menu_button_icon" data-target-tab="registerNewUserBlock">
-            <h4>新增用户</h4>
-        </button>
+<div class="adminTabs">
+    <header class="accountsHeader">
+        <small>账户与数据</small>
+        <h2>账户控制台</h2>
+    </header>
+    <nav class="adminNav" aria-label="账户控制台分区">
+        <button type="button" aria-pressed="true" data-target-tab="usersList"><span data-account-icon="Users"></span>用户</button>
+        <button type="button" aria-pressed="false" data-target-tab="registerNewUserBlock"><span data-account-icon="UserPlus"></span>新增</button>
+        <button type="button" aria-pressed="false" data-target-tab="removalJobs"><span data-account-icon="Clock"></span>清除任务</button>
+        <button type="button" aria-pressed="false" data-target-tab="mailSettings"><span data-account-icon="Mail"></span>邮件设置</button>
     </nav>
-    <div class="userAccountTemplate template_element">
-        <div class="flex-container userAccount alignItemsCenter flexGap10">
-            <div class="flex-container flexFlowColumn alignItemsCenter flexNoGap">
-                <div class="avatar" title="用户头像">
-                    <img src="img/ai4.png" alt="用户头像">
+    <section class="navTab usersList" aria-label="用户">
+        <form class="usersFilters">
+            <div class="accountsBar">
+                <label class="accountsSearch"><span data-account-icon="Search"></span><input name="search" class="text_pole" type="search" aria-label="搜索用户" placeholder="搜索显示名、用户名或邮箱"></label>
+                <button type="submit" class="menu_button">搜索</button>
+                <button type="reset" class="menu_button">重置筛选</button>
+            </div>
+            <details class="accountsFiltersDetails">
+                <summary>筛选与排序</summary>
+                <div class="accountsFields">
+                    <label>搜索字段<select class="text_pole" name="searchBy"><option value="all">全部字段</option><option value="handle">仅用户名</option></select></label>
+                    <label hidden>用户名匹配<select class="text_pole" name="handleMatch"><option value="contains">包含</option><option value="prefix">开头匹配</option><option value="exact">完全匹配</option></select></label>
+                    <label>最近登录<select class="text_pole" name="loginSeen"><option value="any">不限</option><option value="never">从未记录</option><option value="recent">最近若干天内</option><option value="older">早于若干天</option><option value="range">日期范围</option></select></label>
+                    <label hidden>天数<select class="text_pole" name="loginDays"><option>7</option><option>30</option><option>90</option></select></label>
+                    <label hidden>起始日<input class="text_pole" name="loginFrom" type="date"></label>
+                    <label hidden>结束日<input class="text_pole" name="loginTo" type="date"></label>
+                    <label>角色<select class="text_pole" name="role"><option value="all">全部</option><option value="admin">管理员</option><option value="user">普通用户</option></select></label>
+                    <label>账户状态<select class="text_pole" name="enabled"><option value="all">全部</option><option value="enabled">已启用</option><option value="disabled">已禁用</option></select></label>
+                    <label>清除状态<select class="text_pole" name="removal"><option value="all">全部</option><option value="none">未安排</option><option value="pending">待处理</option><option value="grace">保留期</option><option value="purging">正在清除</option></select></label>
+                    <label>排序字段<select class="text_pole" name="sortBy"><option value="created">创建时间</option><option value="lastLogin">最近登录</option><option value="handle">用户名</option></select></label>
+                    <label>排序方向<select class="text_pole" name="sortOrder"><option value="desc">降序</option><option value="asc">升序</option></select></label>
                 </div>
-                <div class="flex-container alignItemsCenter">
-                    <div class="userAvatarChange right_menu_button" title="设置自定义头像">
-                        <i class="fa-fw fa-solid fa-image"></i>
-                    </div>
-                    <div class="userAvatarRemove right_menu_button" title="移除自定义头像">
-                        <i class="fa-fw fa-solid fa-trash"></i>
-                    </div>
-                </div>
-                <form>
-                    <input type="file" class="avatarUpload" accept="image/*" hidden>
-                </form>
-            </div>
-            <div class="flex1 flex-container flexFlowColumn flexNoGap justifyLeft">
-                <div class="flex-container flexGap10 alignItemsCenter">
-                    <i class="hasPassword fa-solid fa-lock" title="This account is password protected."></i>
-                    <i class="noPassword fa-solid fa-lock-open" title="This account is not password protected."></i>
-                    <h3 class="userName margin0"></h3>
-                    <small class="userHandle">&nbsp;</small>
-                </div>
-                <div class="flex-container flexFlowColumn flexNoGap">
-                    <span>
-                        <span>角色：</span>
-                        <span class="userRole"></span>
-                    </span>
-                    <span>
-                        <span>状态：</span>
-                        <span class="userStatus">&nbsp;</span>
-                    </span>
-                    <span>
-                        <span>邮箱：</span>
-                        <span class="userEmail">&nbsp;</span>
-                    </span>
-                    <span>
-                        <span>创建时间：</span>
-                        <span class="userCreated">&nbsp;</span>
-                    </span>
-                </div>
-            </div>
-            <div class="flex-container flexFlowColumn">
-                <div class="flex-container">
-                    <div class="userChangeNameButton menu_button" title="修改显示名称">
-                        <i class="fa-fw fa-solid fa-pencil"></i>
-                    </div>
-                    <div class="userEnableButton menu_button" title="启用账号">
-                        <i class="fa-fw fa-solid fa-check"></i>
-                    </div>
-                    <div class="userDisableButton menu_button" title="禁用账号">
-                        <i class="fa-fw fa-solid fa-ban"></i>
-                    </div>
-                    <div class="userPromoteButton menu_button" title="提升为管理员">
-                        <i class="fa-fw fa-solid fa-arrow-up"></i>
-                    </div>
-                    <div class="userDemoteButton menu_button" title="降级为普通用户">
-                        <i class="fa-fw fa-solid fa-arrow-down"></i>
-                    </div>
-                </div>
-                <div class="flex-container">
-                    <div class="userBackupButton menu_button menu_button_icon" title="下载用户数据备份">
-                        <i class="fa-fw fa-solid fa-download"></i>
-                    </div>
-                    <div class="userChangePasswordButton menu_button" title="修改用户密码">
-                        <i class="fa-fw fa-solid fa-key"></i>
-                    </div>
-                    <div class="userDelete menu_button warning" title="删除用户账号">
-                        <i class="fa-fw fa-solid fa-trash"></i>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="navTab usersList flex-container flexFlowColumn">
-        <div class="usersToolbar flex-container flexGap10 alignItemsCenter">
-            <input class="usersSearch text_pole" type="search" placeholder="搜索显示名、用户名或邮箱">
-            <button type="button" class="usersSearchButton menu_button">搜索</button>
-            <button type="button" class="usersClearSearchButton menu_button">清空</button>
-        </div>
-        <div class="usersMeta flex-container justifySpaceBetween alignItemsCenter">
-            <span class="usersResultSummary">&nbsp;</span>
-            <div class="usersPagination flex-container flexGap10 alignItemsCenter">
-                <button type="button" class="usersPrevPage menu_button">上一页</button>
-                <span class="usersPageInfo">&nbsp;</span>
-                <button type="button" class="usersNextPage menu_button">下一页</button>
-            </div>
-        </div>
-        <div class="usersListItems flex-container flexFlowColumn"></div>
-    </div>
-    <div class="navTab registerNewUserBlock" style="display: none;">
-        <form class="flex-container flexFlowColumn flexGap10 userCreateForm" action="javascript:void(0);">
-            <div class="flex-container flexNoGap">
-                <span>显示名称：</span>
-                <span class="warning">*</span>
-                <input name="_name" class="createUserDisplayName text_pole" type="text" placeholder="例如：张三" autocomplete="username">
-            </div>
-            <div class="flex-container flexNoGap">
-                <span>用户名：</span>
-                <span class="warning">*</span>
-                <input name="handle" class="createUserHandle text_pole" placeholder="例如：zhang-san（仅限小写字母、数字和-号）" type="text" pattern="[a-z0-9-]+">
-            </div>
-            <div class="flex-container flexNoGap">
-                <span>邮箱：</span>
-                <input name="email" class="createUserEmail text_pole" type="email" placeholder="例如：12345678@qq.com" autocomplete="email">
-            </div>
-            <div class="flex-container flexNoGap">
-                <span>密码：</span>
-                <input name="password" class="createUserPassword text_pole" type="password" placeholder="不填写则无密码" autocomplete="new-password">
-            </div>
-            <div class="flex-container flexNoGap">
-                <span>确认密码：</span>
-                <input name="confirm" class="createUserConfirmPassword text_pole" type="password" placeholder="不填写则无密码" autocomplete="new-password">
-            </div>
-            <span>系统会在 data 目录下用用户名创建对应用户数据目录。</span>
-            <div class="flex-container justifyCenter">
-                <button type="submit" class="menu_button menu_button_icon newUserRegisterFinalizeButton">
-                    <i class="fa-fw fa-solid fa-user-plus"></i>
-                    <span>创建</span>
-                </button>
-            </div>
+            </details>
         </form>
+        <div class="accountsBar accountsBulk">
+            <label><input type="checkbox" class="selectAccountPage" disabled>选择本页</label>
+            <span class="accountsSelection" role="status"></span>
+            <button type="button" class="menu_button clearSelection" disabled>取消选择</button>
+            <button type="button" class="menu_button warning deleteSelection" disabled><span data-account-icon="Trash2"></span>预览清除</button>
+        </div>
+        <div class="accountsScroll usersListItems" role="list" aria-label="用户结果"></div>
+        <footer class="accountsBar accountsFooter">
+            <span class="usersResultSummary" role="status"></span>
+            <div class="accountsBar"><button type="button" class="usersPrevPage menu_button" disabled>上一页</button><span class="usersPageInfo"></span><button type="button" class="usersNextPage menu_button" disabled>下一页</button></div>
+        </footer>
+    </section>
+    <div class="userAccountTemplate" hidden>
+        <article class="userAccount" role="listitem">
+            <input type="checkbox" class="accountSelect">
+            <div class="avatar" aria-hidden="true"><img alt=""></div>
+            <div class="accountIdentity">
+                <div class="accountsBar"><strong class="userName"></strong><small class="userHandle"></small></div>
+                <div class="accountsBar accountTags"><span class="userRole"></span><span class="userStatus"></span><span class="userPassword"></span><span class="userRemoval"></span></div>
+                <div class="accountFacts"><span>邮箱：<span class="userEmail"></span></span><span>最近登录：<span class="userLastLogin"></span></span><span>创建：<span class="userCreated"></span></span></div>
+            </div>
+            <details class="accountActions">
+                <summary>操作</summary>
+                <div class="accountsBar">
+                    <button type="button" class="menu_button userChangeNameButton"><span data-account-icon="Pencil"></span>改名</button>
+                    <button type="button" class="menu_button userChangeEmail"><span data-account-icon="Mail"></span>改邮箱</button>
+                    <button type="button" class="menu_button userChangePasswordButton"><span data-account-icon="KeyRound"></span>改密</button>
+                    <button type="button" class="menu_button userEnableButton"><span data-account-icon="Check"></span>启用</button>
+                    <button type="button" class="menu_button userDisableButton"><span data-account-icon="Ban"></span>禁用</button>
+                    <button type="button" class="menu_button userPromoteButton"><span data-account-icon="ArrowUp"></span>提升为管理员</button>
+                    <button type="button" class="menu_button userDemoteButton"><span data-account-icon="ArrowDown"></span>降为普通用户</button>
+                    <button type="button" class="menu_button userAvatarChange"><span data-account-icon="Image"></span>设置头像</button>
+                    <button type="button" class="menu_button userAvatarRemove"><span data-account-icon="ImageOff"></span>移除头像</button>
+                    <input type="file" class="avatarUpload" accept="image/*" hidden>
+                    <button type="button" class="menu_button userBackupButton"><span data-account-icon="Download"></span>备份</button>
+                    <button type="button" class="menu_button warning userDelete"><span data-account-icon="Trash2"></span>预览清除</button>
+                </div>
+                <p class="accountBackupStatus" role="status"></p>
+            </details>
+        </article>
     </div>
+    <section class="navTab registerNewUserBlock" aria-label="新增用户" hidden>
+        <form class="accountsScroll userCreateForm">
+            <h3>新增用户</h3>
+            <div class="accountsFields">
+                <label>显示名称<input name="_name" class="createUserDisplayName text_pole" type="text" autocomplete="off" required></label>
+                <label>用户名<input name="handle" class="createUserHandle text_pole" type="text" pattern="[a-z0-9\-]+" autocomplete="off" required></label>
+                <label>邮箱<input name="email" class="text_pole" type="email" autocomplete="off"></label>
+                <label>密码<input name="password" class="text_pole" type="password" placeholder="留空则无密码" autocomplete="new-password"></label>
+                <label>确认密码<input name="confirm" class="text_pole" type="password" autocomplete="new-password"></label>
+            </div>
+            <p>系统将以用户名创建独立的用户数据目录。</p>
+            <button type="submit" class="menu_button"><span data-account-icon="UserPlus"></span>创建用户</button>
+        </form>
+    </section>
+    <section class="navTab removalJobs" aria-label="清除任务" hidden>
+        <div class="accountsBar accountsBulk"><span>保留期结束后，数据可能被永久清除。</span><button type="button" class="menu_button jobsRefresh">刷新</button></div>
+        <div class="accountsScroll jobsList" role="list" aria-label="清除任务结果"></div>
+        <footer class="accountsBar accountsFooter">
+            <span class="jobsSummary" role="status"></span>
+            <div class="accountsBar"><button type="button" class="menu_button jobsPrev" disabled>上一页</button><span class="jobsPageInfo"></span><button type="button" class="menu_button jobsNext" disabled>下一页</button></div>
+        </footer>
+    </section>
+    <section class="navTab mailSettings" aria-label="邮件设置" hidden>
+        <form class="accountsScroll mailSettingsForm">
+            <h3>通知邮件 · SMTP</h3>
+            <p>密码与测试收件地址由部署端配置；本页面不读取或修改密码。</p>
+            <p class="mailStatus" role="status"></p>
+            <fieldset disabled>
+                <legend>连接参数</legend>
+                <div class="accountsFields">
+                    <label>SMTP 主机<input class="text_pole" name="host" type="text"></label>
+                    <label>端口<input class="text_pole" name="port" type="number" min="1" max="65535"></label>
+                    <label>SMTP 用户名<input class="text_pole" name="user" type="text" autocomplete="off"></label>
+                    <label>发件人<input class="text_pole" name="from" type="text"></label>
+                    <label class="secureMail"><input name="secure" type="checkbox">使用隐式 TLS</label>
+                </div>
+            </fieldset>
+            <div class="accountsBar"><button type="submit" class="menu_button mailSave" disabled>保存</button><button type="button" class="menu_button mailTest" disabled>发送测试邮件</button><button type="button" class="menu_button mailRefresh">重新读取</button></div>
+        </form>
+    </section>
 </div>

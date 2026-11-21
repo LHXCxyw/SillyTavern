@@ -32,6 +32,15 @@
 **/.env*
 **/*.pem
 **/certs
+/config.yaml
+/config.conf*
+/config
+/default/scaffold
+**/secrets.json
+**/*.tar
+**/*.tar.gz
+**/*.zip
+/.trae
 
 # --- Documentation ---
 readme*

@@ -13,7 +13,7 @@ import { csrfSync } from 'csrf-sync';
 import express from 'express';
 import compression from 'compression';
 import cookieSession from 'cookie-session';
-import multer from 'multer';
+import { createUserUploadMiddleware } from './middleware/user-upload.js';
 import responseTime from 'response-time';
 import helmet from 'helmet';
 import bodyParser from 'body-parser';
@@ -64,6 +64,10 @@ import {
     getConfigValue,
 } from './util.js';
 import { UPLOADS_DIRECTORY } from './constants.js';
+import { initUserLifecycle, startUserLifecycle, stopUserLifecycle } from './user-lifecycle.js';
+import { initUserBackupJobs, stopUserBackupJobs } from './user-backup-jobs.js';
+import { purgeUserData } from './user-data-purge.js';
+import { trackAuthenticatedRequest } from './user-operation-state.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
@@ -260,6 +264,7 @@ app.use('/api/cardkeys-public', cardkeysPublicRouter);
 
 // Everything below this line requires authentication
 app.use(requireLoginMiddleware);
+app.use(trackAuthenticatedRequest);
 app.post('/api/ping', (request, response) => {
     if (request.query.extend && request.session) {
         request.session.touch = Date.now();
@@ -280,7 +285,7 @@ if (cliArgs.enableCorsProxy) {
 
 // File uploads
 const uploadsPath = path.join(cliArgs.dataRoot, UPLOADS_DIRECTORY);
-app.use(multer({ dest: uploadsPath, limits: { fieldSize: 500 * 1024 * 1024 } }).single('avatar'));
+app.use(createUserUploadMiddleware(uploadsPath));
 app.use(multerMonkeyPatch);
 
 app.get('/version', async function (_, response) {
@@ -331,6 +336,7 @@ async function preSetupTasks() {
     const exitProcess = async () => {
         if (isExiting) return;
         isExiting = true;
+        await Promise.allSettled([stopUserLifecycle(), stopUserBackupJobs()]);
         await statsOnExit();
         if (typeof cleanupPlugins === 'function') {
             await cleanupPlugins();
@@ -460,6 +466,7 @@ async function postSetupTasks(result) {
     console.log('\n' + getSeparator(plainGoToLog.length) + '\n');
 
     setupLogLevel();
+    startUserLifecycle();
     serverEvents.emit(EVENT_NAMES.SERVER_STARTED, { url: browserLaunchUrl });
 }
 
@@ -492,6 +499,8 @@ function setDnsResolutionOrder() {
 
 // User storage module needs to be initialized before starting the server
 initUserStorage(globalThis.DATA_ROOT)
+    .then(() => initUserLifecycle({ purgeUser: purgeUserData }))
+    .then(initUserBackupJobs)
     .then(setDnsResolutionOrder)
     .then(ensurePublicDirectoriesExist)
     .then(migrateUserData)
@@ -501,4 +510,8 @@ initUserStorage(globalThis.DATA_ROOT)
     .then(preSetupTasks)
     .then(apply404Middleware)
     .then(() => new ServerStartup(app, cliArgs).start())
-    .then(postSetupTasks);
+    .then(postSetupTasks)
+    .catch(error => {
+        console.error('服务启动失败:', error);
+        process.exit(1);
+    });

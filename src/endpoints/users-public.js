@@ -5,7 +5,8 @@ import express from 'express';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { getIpAddress, retryAfter } from '../express-common.js';
 import { color, Cache, getConfigValue } from '../util.js';
-import { KEY_PREFIX, getUserAvatar, toKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, ensurePublicDirectoriesExist, getUserDirectories } from '../users.js';
+import { KEY_PREFIX, getUserAvatar, toKey, getPasswordHash, getPasswordSalt, getAccountVersion, canCreateUserAccount, ensureUserDirectories, establishUserSession } from '../users.js';
+import { acquireUserOperation, isUserPurgeBlocked, withUserLock } from '../user-operation-state.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { generateEmailCode, isQQEmail, removeEmailCode, saveEmailCode, sendPasswordResetEmail, sendVerificationEmail, verifyEmailCode } from '../emailVerification.js';
 import { markCardKeyAsUsed, verifyCardKey } from '../cardkeys.js';
@@ -49,7 +50,7 @@ router.post('/list', async (_request, response) => {
 
         /** @type {Promise<import('../users.js').UserViewModel>[]} */
         const viewModelPromises = users
-            .filter(x => x.enabled)
+            .filter(x => x.enabled && !isUserPurgeBlocked(x.handle))
             .map(user => new Promise(async (resolve) => {
                 getUserAvatar(user.handle).then(avatar =>
                     resolve({
@@ -73,7 +74,7 @@ router.post('/list', async (_request, response) => {
 
 router.post('/login', async (request, response) => {
     try {
-        if (!request.body.handle) {
+        if (typeof request.body?.handle !== 'string' || !request.body.handle) {
             console.warn('Login failed: Missing required fields');
             return response.status(400).json({ error: '缺少必要参数' });
         }
@@ -89,12 +90,12 @@ router.post('/login', async (request, response) => {
             return response.status(403).json({ error: '账号或密码错误' });
         }
 
-        if (!user.enabled) {
+        if (!user.enabled || isUserPurgeBlocked(user.handle)) {
             console.warn('Login failed: User', user.handle, 'is disabled');
             return response.status(403).json({ error: '该账号已被禁用' });
         }
 
-        if (user.password && user.password !== getPasswordHash(request.body.password, user.salt)) {
+        if (user.password && (typeof request.body.password !== 'string' || user.password !== getPasswordHash(request.body.password, user.salt))) {
             console.warn('Login failed: Incorrect password for', user.handle);
             return response.status(403).json({ error: '账号或密码错误' });
         }
@@ -104,12 +105,10 @@ router.post('/login', async (request, response) => {
             return response.sendStatus(500);
         }
 
+        if (!await establishUserSession(request, user, { explicit: true })) {
+            return response.status(403).json({ error: '账号或密码已变更，请重新登录' });
+        }
         await loginLimiter.delete(ip);
-        user.lastLogin = Date.now();
-        user.lastActivity = user.lastLogin;
-        await storage.setItem(toKey(user.handle), user);
-        request.session.handle = user.handle;
-        request.session.version = getAccountVersion(user);
         console.info('Login successful:', user.handle, 'from', ip, 'at', new Date().toLocaleString());
         return response.json({ handle: user.handle });
     } catch (error) {
@@ -125,7 +124,7 @@ router.post('/login', async (request, response) => {
 
 router.post('/recover-step1', async (request, response) => {
     try {
-        if (!request.body.handle) {
+        if (typeof request.body?.handle !== 'string' || !request.body.handle) {
             console.warn('Recover step 1 failed: Missing required fields');
             return response.status(400).json({ error: '缺少必要参数' });
         }
@@ -141,21 +140,23 @@ router.post('/recover-step1', async (request, response) => {
             return response.status(404).json({ error: '用户不存在' });
         }
 
-        if (!user.enabled) {
-            console.error('Recover step 1 failed: User', user.handle, 'is disabled');
-            return response.status(403).json({ error: '该账号已被禁用' });
+        const release = user.enabled && acquireUserOperation(user.handle);
+        if (!release) return response.status(403).json({ error: '该账号当前不可找回' });
+        try {
+            const mfaCode = generateRecoveryCode();
+            if (user.email && isQQEmail(user.email)) {
+                await sendPasswordResetEmail(user.email, mfaCode);
+            } else {
+                console.log();
+                console.log(color.blue(`${user.name}, your password recovery code is: `) + color.magenta(mfaCode));
+                console.log();
+            }
+            if (isUserPurgeBlocked(user.handle)) return response.sendStatus(403);
+            MFA_CACHE.set(user.accountId, { code: mfaCode, email: user.email ?? '', version: getAccountVersion(user) });
+            return response.sendStatus(204);
+        } finally {
+            release();
         }
-
-        const mfaCode = generateRecoveryCode();
-        if (user.email && isQQEmail(user.email)) {
-            await sendPasswordResetEmail(user.email, mfaCode);
-        } else {
-            console.log();
-            console.log(color.blue(`${user.name}, your password recovery code is: `) + color.magenta(mfaCode));
-            console.log();
-        }
-        MFA_CACHE.set(user.handle, mfaCode);
-        return response.sendStatus(204);
     } catch (error) {
         if (error instanceof RateLimiterRes) {
             console.error('Recover step 1 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
@@ -216,42 +217,38 @@ router.post('/register', async (request, response) => {
         const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
         await registerLimiter.consume(`${ip}:${email}`);
 
-        const handles = await getAllUserHandles();
-        if (handles.includes(handle)) {
-            return response.status(409).json({ error: '用户已存在' });
-        }
+        return await withUserLock(handle, async () => {
+            if (!await canCreateUserAccount(handle)) {
+                return response.status(409).json({ error: '用户名不可用或仍有待清除数据' });
+            }
+            if (!await verifyEmailCode(email, verificationCode)) {
+                return response.status(400).json({ error: '验证码错误或已过期' });
+            }
+            if (!await verifyCardKey(cardKey)) {
+                return response.status(400).json({ error: '卡密无效或已被使用' });
+            }
 
-        const emailCodeValid = await verifyEmailCode(email, verificationCode);
-        if (!emailCodeValid) {
-            return response.status(400).json({ error: '验证码错误或已过期' });
-        }
-
-        const cardKeyValid = await verifyCardKey(cardKey);
-        if (!cardKeyValid) {
-            return response.status(400).json({ error: '卡密无效或已被使用' });
-        }
-
-        const salt = getPasswordSalt();
-        const user = {
-            handle,
-            name,
-            created: Date.now(),
-            password: getPasswordHash(passwordText, salt),
-            salt,
-            admin: false,
-            enabled: true,
-            email,
-            lastLogin: null,
-            lastActivity: null,
-        };
-
-        await storage.setItem(toKey(handle), user);
-        await ensurePublicDirectoriesExist();
-        await checkForNewContent([getUserDirectories(handle)], [CONTENT_TYPES.SETTINGS]);
-        await markCardKeyAsUsed(cardKey, handle);
-        await removeEmailCode(email);
-        await registerLimiter.delete(`${ip}:${email}`);
-        return response.json({ handle });
+            const salt = getPasswordSalt();
+            const user = {
+                handle,
+                accountId: crypto.randomUUID(),
+                name,
+                created: Date.now(),
+                password: getPasswordHash(passwordText, salt),
+                salt,
+                admin: false,
+                enabled: true,
+                email,
+                lastLogin: null,
+                lastActivity: null,
+            };
+            await storage.setItem(toKey(handle), user);
+            await checkForNewContent([ensureUserDirectories(handle)], [CONTENT_TYPES.SETTINGS]);
+            await markCardKeyAsUsed(cardKey, handle);
+            await removeEmailCode(email);
+            await registerLimiter.delete(`${ip}:${email}`);
+            return response.json({ handle });
+        });
     } catch (error) {
         if (error instanceof RateLimiterRes) {
             return retryAfter(response, error).status(429).send({ error: '注册请求过于频繁，请稍后再试' });
@@ -264,56 +261,35 @@ router.post('/register', async (request, response) => {
 
 router.post('/recover-step2', async (request, response) => {
     try {
-        if (!request.body.handle || !request.body.code) {
+        if (typeof request.body?.handle !== 'string' || !request.body.handle || typeof request.body.code !== 'string' || !request.body.code || (request.body.newPassword !== undefined && typeof request.body.newPassword !== 'string')) {
             console.warn('Recover step 2 failed: Missing required fields');
             return response.status(400).json({ error: '缺少必要参数' });
         }
 
-        /** @type {import('../users.js').User} */
-        const user = await storage.getItem(toKey(request.body.handle));
+        const { handle, code, newPassword } = request.body;
         const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
-        const rateLimit = await recoverLimiter.get(ip);
-
-        if (rateLimit !== null && rateLimit.consumedPoints > recoverLimiter.points) {
-            throw rateLimit;
-        }
-
-        if (!user) {
-            console.error('Recover step 2 failed: User', request.body.handle, 'not found');
-            return response.status(404).json({ error: '用户不存在' });
-        }
-
-        if (!user.enabled) {
-            console.warn('Recover step 2 failed: User', user.handle, 'is disabled');
-            return response.status(403).json({ error: '该账号已被禁用' });
-        }
-
-        const mfaCode = MFA_CACHE.get(user.handle);
-
-        if (request.body.code !== mfaCode) {
-            await recoverLimiter.consume(ip);
-            console.warn('Recover step 2 failed: Incorrect code');
-            return response.status(403).json({ error: '验证码错误' });
-        }
-
-        if (request.body.newPassword) {
-            const salt = getPasswordSalt();
-            user.password = getPasswordHash(request.body.newPassword, salt);
-            user.salt = salt;
-            await storage.setItem(toKey(user.handle), user);
-        } else {
-            user.password = '';
-            user.salt = '';
-            await storage.setItem(toKey(user.handle), user);
-        }
-
-        if (request.session && request.session.handle === user.handle) {
-            request.session.version = getAccountVersion(user);
-        }
-
-        await recoverLimiter.delete(ip);
-        MFA_CACHE.remove(user.handle);
-        return response.sendStatus(204);
+        return await withUserLock(handle, async () => {
+            const rateLimit = await recoverLimiter.get(ip);
+            if (rateLimit !== null && rateLimit.consumedPoints > recoverLimiter.points) throw rateLimit;
+            const user = await storage.getItem(toKey(handle));
+            if (!user) return response.status(404).json({ error: '用户不存在' });
+            if (!user.enabled || isUserPurgeBlocked(handle)) return response.status(403).json({ error: '该账号当前不可找回' });
+            const recovery = MFA_CACHE.get(user.accountId);
+            if (code !== recovery?.code || recovery.email !== (user.email ?? '') || recovery.version !== getAccountVersion(user)) {
+                await recoverLimiter.consume(ip);
+                return response.status(403).json({ error: '验证码错误' });
+            }
+            const previousVersion = getAccountVersion(user);
+            user.salt = newPassword ? getPasswordSalt() : '';
+            user.password = newPassword ? getPasswordHash(newPassword, user.salt) : '';
+            await storage.setItem(toKey(handle), user);
+            MFA_CACHE.remove(user.accountId);
+            if (request.session?.handle === handle && request.session.version === previousVersion) {
+                request.session.version = getAccountVersion(user);
+            }
+            await recoverLimiter.delete(ip);
+            return response.sendStatus(204);
+        });
     } catch (error) {
         if (error instanceof RateLimiterRes) {
             console.error('Recover step 2 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));

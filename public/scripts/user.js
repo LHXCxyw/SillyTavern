@@ -1,3 +1,4 @@
+import { ArrowDown, ArrowUp, Ban, Camera, Check, Clock, Download, Image, ImageOff, KeyRound, Lock, LockOpen, Mail, Pencil, Search, Settings, Skull, Trash2, TriangleAlert, UserPlus, Users, createLucideIcon } from '../lib.js';
 import { getRequestHeaders } from '../script.js';
 import { POPUP_RESULT, POPUP_TYPE, callGenericPopup } from './popup.js';
 import { canViewSecrets } from './secrets.js';
@@ -71,35 +72,10 @@ async function getCurrentUser() {
 
         currentUser = await response.json();
         $('#admin_button').toggle(accountsEnabled && isAdmin());
+        return true;
     } catch (error) {
-        console.error('Error getting current user:', error);
-    }
-}
-
-/**
- * Get a list of all users.
- * @param {object} options List options
- * @param {number} options.page Page number
- * @param {number} options.pageSize Page size
- * @param {string} options.search Search keyword
- * @returns {Promise<import('../../src/users.js').UserViewModel[]>} Users
- */
-async function getUsers({ page = 1, pageSize = 25, search = '' } = {}) {
-    try {
-        const response = await fetch('/api/users/get', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ page, pageSize, search }),
-        });
-
-        if (!response.ok) {
-            throw new Error('Failed to get users');
-        }
-
-        const data = await response.json();
-        return Array.isArray(data) ? { items: data, total: data.length, page: 1, pageSize: data.length, totalPages: 1 } : data;
-    } catch (error) {
-        console.error('Error getting users:', error);
+        console.error('无法读取当前账户：', error);
+        return false;
     }
 }
 
@@ -253,48 +229,6 @@ async function createUser(form, callback) {
 }
 
 /**
- * Backup a user's data.
- * @param {string} handle Handle of the user to backup
- * @param {function} callback Success callback
- * @returns {Promise<void>}
- */
-async function backupUserData(handle, callback) {
-    try {
-        toastr.info('Please wait for the download to start.', 'Backup Requested');
-        const response = await fetch('/api/users/backup', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ handle }),
-        });
-
-        if (!response.ok) {
-            const data = await response.json();
-            toastr.error(data.error || 'Unknown error', 'Failed to backup user data');
-            throw new Error('Failed to backup user data');
-        }
-
-        const includesSecrets = await canViewSecrets();
-        if (includesSecrets === false) {
-            toastr.warning('The backup will not include secrets due to a server configuration.', 'Secrets Not Included');
-        }
-
-        const blob = await response.blob();
-        const header = response.headers.get('Content-Disposition');
-        const parts = header.split(';');
-        const filename = parts[1].split('=')[1].replaceAll('"', '');
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-        callback();
-    } catch (error) {
-        console.error('Error backing up user data:', error);
-    }
-}
-
-/**
  * Shows a popup to change a user's password.
  * @param {string} handle User handle
  * @param {function} callback Success callback
@@ -341,60 +275,6 @@ async function changePassword(handle, callback) {
         callback();
     } catch (error) {
         console.error('Error changing password:', error);
-    }
-}
-
-/**
- * Delete a user.
- * @param {string} handle User handle
- * @param {function} callback Success callback
- */
-async function deleteUser(handle, callback) {
-    try {
-        if (handle === currentUser.handle) {
-            toastr.error('Cannot delete yourself', 'Failed to delete user');
-            throw new Error('Cannot delete yourself');
-        }
-
-        let purge = false;
-        let confirmHandle = '';
-
-        const template = $(await renderTemplateAsync('deleteUser'));
-        template.find('#deleteUserName').text(handle);
-        template.find('input[name="deleteUserData"]').on('input', function () {
-            purge = $(this).is(':checked');
-        });
-        template.find('input[name="deleteUserHandle"]').on('input', function () {
-            confirmHandle = String($(this).val());
-        });
-
-        const result = await callGenericPopup(template, POPUP_TYPE.CONFIRM, '', { okButton: 'Delete', cancelButton: 'Cancel', wide: false, large: false });
-
-        if (result !== POPUP_RESULT.AFFIRMATIVE) {
-            throw new Error('Delete user cancelled');
-        }
-
-        if (handle !== confirmHandle) {
-            toastr.error('Handles do not match', 'Failed to delete user');
-            throw new Error('Handles do not match');
-        }
-
-        const response = await fetch('/api/users/delete', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ handle, purge }),
-        });
-
-        if (!response.ok) {
-            const data = await response.json();
-            toastr.error(data.error || 'Unknown error', 'Failed to delete user');
-            throw new Error('Failed to delete user');
-        }
-
-        toastr.success('User deleted successfully', 'User Deleted');
-        callback();
-    } catch (error) {
-        console.error('Error deleting user:', error);
     }
 }
 
@@ -678,7 +558,10 @@ async function resetEverything(callback) {
 }
 
 async function openUserProfile() {
-    await getCurrentUser();
+    if (!(await getCurrentUser())) {
+        toastr.error('无法读取账户资料，请重试。');
+        return;
+    }
     const template = $(await renderTemplateAsync('userProfile'));
     template.find('.userName').text(currentUser.name);
     template.find('.userHandle').text(currentUser.handle);
@@ -697,12 +580,15 @@ async function openUserProfile() {
         template.find('.hasPassword').toggle(currentUser.password);
         template.find('.noPassword').toggle(!currentUser.password);
     }));
-    template.find('.userBackupButton').on('click', function () {
-        $(this).addClass('disabled');
-        backupUserData(currentUser.handle, () => {
-            $(this).removeClass('disabled');
-        });
-    });
+    const removal = currentUser.removal;
+    if (removal) {
+        const notice = removal.state === 'purging' ? '账户数据正在清除。' : removal.purgeAt
+            ? `账户数据保留至 ${accountDate(removal.purgeAt)}（本地时间），请在截止前准备并下载备份。`
+            : '账户清除任务待处理，尚无保留期截止时间。';
+        template.find('.accountRemovalNotice').prop('hidden', false).find('.accountRemovalText').text(notice);
+    }
+    renderAccountIcons(template);
+    bindBackup(template, currentUser.handle, removal);
     template.find('.userResetSettingsButton').on('click', () => resetSettings(currentUser.handle, () => location.reload()));
     template.find('.userResetAllButton').on('click', () => resetEverything(() => location.reload()));
     template.find('.userAvatarChange').on('click', () => template.find('.avatarUpload').trigger('click'));
@@ -783,137 +669,579 @@ async function changeAvatar(handle, avatar) {
     }
 }
 
-async function openAdminPanel() {
-    const usersState = {
-        page: 1,
-        pageSize: 25,
-        search: '',
-        totalPages: 1,
-    };
+const accountIcons = { ArrowDown, ArrowUp, Ban, Camera, Check, Clock, Download, Image, ImageOff, KeyRound, Lock, LockOpen, Mail, Pencil, Search, Settings, Skull, Trash2, TriangleAlert, UserPlus, Users };
+const removalStates = new Map(Object.entries({ pending: '待处理', queued: '待发送', blocked: '待处理', grace: '保留期', purging: '正在清除', cleared: '已清除', cancelled: '已取消' }));
+const backupJobsPath = '/backup/jobs';
+const removalJobsPath = '/delete/jobs';
+const smtpErrors = new Map(Object.entries({
+    SMTP_INVALID_SETTINGS: '邮件配置不合法，请检查连接参数。',
+    SMTP_SETTING_LOCKED: '有字段已被部署端锁定，请重新读取设置。',
+    SMTP_ENDPOINT_NOT_ALLOWED: '连接参数不符合部署端允许的 SMTP 端点。',
+    SMTP_NOT_CONFIGURED: 'SMTP 尚未配置完成。',
+    SMTP_TEST_RECIPIENT_NOT_CONFIGURED: '部署端尚未配置测试收件地址。',
+    SMTP_TEST_RATE_LIMITED: '测试邮件发送过于频繁，请稍后再试。',
+    SMTP_SETTINGS_UNAVAILABLE: '暂时无法读取或保存邮件配置，请稍后再试。',
+    SMTP_REJECTED: 'SMTP 服务器拒绝了邮件，请检查连接配置。',
+    SMTP_HANDSHAKE_FAILED: '无法连接 SMTP 服务器或完成握手。',
+    SMTP_DELIVERY_UNCERTAIN: 'SMTP 未返回明确结果，请先检查收件箱，再决定是否重试。',
+    SMTP_INTERNAL_ERROR: '邮件服务发生错误，请查看服务器日志。',
+}));
 
-    async function renderUsers() {
-        const data = await getUsers(usersState);
-        const users = data?.items ?? [];
-        usersState.page = data?.page ?? usersState.page;
-        usersState.totalPages = data?.totalPages ?? 1;
-        template.find('.usersListItems').empty();
-        template.find('.usersResultSummary').text(`共 ${data?.total ?? 0} 个用户`);
-        template.find('.usersPageInfo').text(`第 ${usersState.page} / ${usersState.totalPages} 页`);
-        template.find('.usersPrevPage').toggleClass('disabled', usersState.page <= 1);
-        template.find('.usersNextPage').toggleClass('disabled', usersState.page >= usersState.totalPages);
-        for (const user of users) {
-            const userBlock = template.find('.userAccountTemplate .userAccount').clone();
-            userBlock.find('.userName').text(user.name);
-            userBlock.find('.userHandle').text(user.handle);
-            userBlock.find('.userStatus').text(user.enabled ? '已启用' : '已禁用');
-            userBlock.find('.userRole').text(user.admin ? '管理员' : '普通用户');
-            userBlock.find('.userEmail').text(user.email || '未填写');
-            userBlock.find('.avatar img').attr('src', user.avatar || 'img/ai4.png');
-            userBlock.find('.hasPassword').toggle(user.password);
-            userBlock.find('.noPassword').toggle(!user.password);
-            userBlock.find('.userCreated').text(new Date(user.created).toLocaleString());
-            userBlock.find('.userEnableButton').toggle(!user.enabled).on('click', () => enableUser(user.handle, renderUsers));
-            userBlock.find('.userDisableButton').toggle(user.enabled).on('click', () => disableUser(user.handle, renderUsers));
-            userBlock.find('.userPromoteButton').toggle(!user.admin).on('click', () => promoteUser(user.handle, renderUsers));
-            userBlock.find('.userDemoteButton').toggle(user.admin).on('click', () => demoteUser(user.handle, renderUsers));
-            userBlock.find('.userChangePasswordButton').on('click', () => changePassword(user.handle, renderUsers));
-            userBlock.find('.userDelete').on('click', () => deleteUser(user.handle, renderUsers));
-            userBlock.find('.userChangeNameButton').on('click', async () => changeName(user.handle, user.name, renderUsers));
-            userBlock.find('.userBackupButton').on('click', function () {
-                $(this).addClass('disabled').off('click');
-                backupUserData(user.handle, renderUsers);
-            });
-            userBlock.find('.userAvatarChange').on('click', () => userBlock.find('.avatarUpload').trigger('click'));
-            userBlock.find('.avatarUpload').on('change', async function () {
-                if (!(this instanceof HTMLInputElement)) {
-                    return;
-                }
+async function previewRemoval(handles, isOpen) {
+    const { previewId, expiresAt, retentionHours, items } = await accountRequest('/delete/preview', 'POST', { handles });
+    if (!isOpen()) return;
+    const eligible = items.filter(item => item.eligible).length;
+    const panel = $('<section class="accountPreview">').append(
+        $('<h3>').text('清除任务预览'),
+        $('<p>').text(`可提交 ${eligible} / ${items.length} 个。保留期为 ${retentionHours} 小时；未能发送通知的任务只会待处理，不会清除数据。`),
+        $('<p>').text(`预览有效至 ${accountDate(expiresAt)}。保留期结束后，数据清除不可撤销。`),
+    );
+    const list = $('<ul class="accountPreviewList" tabindex="0">').appendTo(panel);
+    for (const item of items) {
+        list.append($('<li>').text(`${item.name || item.handle}（${item.handle}） · ${item.email || '无邮箱'} · ${item.eligible ? '可建立任务' : '不可提交'}${item.reason ? `：${item.reason}` : ''}`));
+    }
+    const result = await callGenericPopup(panel, eligible ? POPUP_TYPE.CONFIRM : POPUP_TYPE.TEXT, '', {
+        okButton: eligible ? '提交清除任务' : '关闭', cancelButton: '返回', allowVerticalScrolling: true,
+    });
+    if (!eligible || result !== POPUP_RESULT.AFFIRMATIVE || !isOpen()) return;
+    if (expiresAt <= Date.now()) throw new Error('预览已过期，请重新预览。');
+    const submitted = await accountRequest('/delete', 'POST', { previewId });
+    const accepted = submitted.items.filter(item => item.ok).map(item => item.handle);
+    const outcome = $('<section class="accountPreview">').append($('<h3>').text(`已提交 ${accepted.length} / ${submitted.items.length} 个任务`));
+    const results = $('<ul class="accountPreviewList" tabindex="0">').appendTo(outcome);
+    for (const item of submitted.items) {
+        results.append($('<li>').text(`${item.handle} · ${item.ok ? removalStates.get(item.state) ?? '已提交' : '未提交'}${item.reason ? `：${item.reason}` : ''}`));
+    }
+    if (isOpen()) await callGenericPopup(outcome, POPUP_TYPE.TEXT, '', { okButton: '关闭', allowVerticalScrolling: true });
+    return accepted;
+}
 
-                const file = this.files[0];
-                if (!file) {
-                    return;
-                }
+async function changeUserEmail(user, refresh) {
+    const label = $('<label>').text('新邮箱');
+    const input = $('<input type="email" class="text_pole" autocomplete="off" required autofocus>').val(user.email ?? '').appendTo(label);
+    const panel = $('<section class="accountPreview">').append(
+        $('<h3>').text(`修改 ${user.handle} 的邮箱`),
+        $('<p>').text('更改邮箱会取消已有清除任务。如仍需清除，请使用新邮箱重新预览并排期。'),
+        label,
+    );
+    const result = await callGenericPopup(panel, POPUP_TYPE.CONFIRM, '', { okButton: '保存邮箱', cancelButton: '返回' });
+    if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+    if (!input[0].checkValidity()) {
+        toastr.error('请输入有效的邮箱地址。');
+        return;
+    }
+    const email = String(input.val()).trim();
+    if (email === (user.email ?? '')) return;
+    try {
+        await accountRequest('/admin/change-email', 'POST', { handle: user.handle, email });
+        toastr.success('邮箱已更新');
+        refresh();
+    } catch (error) {
+        toastr.error(error.message, '无法修改邮箱', { escapeHtml: true });
+    }
+}
 
-                await cropAndUploadAvatar(user.handle, file);
-                renderUsers();
-            });
-            userBlock.find('.userAvatarRemove').on('click', async function () {
-                await changeAvatar(user.handle, '');
-                renderUsers();
-            });
-            template.find('.usersListItems').append(userBlock);
+function bindRemovalJobs(template, refreshUsers) {
+    const list = template.find('.jobsList');
+    const summary = template.find('.jobsSummary');
+    const prev = template.find('.jobsPrev');
+    const next = template.find('.jobsNext');
+    const pageInfo = template.find('.jobsPageInfo');
+    let page = 1;
+    let request;
+    let closed = false;
+
+    async function refresh(target = page) {
+        if (closed) return;
+        request?.abort();
+        const controller = new AbortController();
+        request = controller;
+        list.empty().attr('aria-busy', 'true');
+        prev.add(next).prop('disabled', true);
+        pageInfo.empty();
+        summary.text('正在读取清除任务…');
+        try {
+            const data = await accountRequest(`${removalJobsPath}?page=${target}`, 'GET', undefined, controller.signal);
+            if (controller.signal.aborted) return;
+            const totalPages = Math.max(1, data.totalPages);
+            if (target > totalPages && !data.items.length) return refresh(totalPages);
+            page = data.page;
+            for (const job of data.items) {
+                const row = $('<article class="accountJob" role="listitem">').append(
+                    $('<div class="accountsBar">').append($('<strong>').text(job.handle), $('<small>').text(removalStates.get(job.state) ?? job.state)),
+                    $('<div class="accountFacts">').text(`创建：${accountDate(job.createdAt)} · 通知受理：${accountDate(job.acceptedAt)} · 清除时间：${accountDate(job.purgeAt)}`),
+                );
+                if (job.reason) row.append($('<div>').text(job.reason));
+                const actions = $('<div class="accountsBar">').appendTo(row);
+                const addAction = (label, action, prompt) => {
+                    $('<button type="button" class="menu_button">').text(label).appendTo(actions).on('click', async function () {
+                        actions.find('button').prop('disabled', true);
+                        try {
+                            const confirmed = await callGenericPopup($('<p>').text(`${job.handle}：${prompt}`), POPUP_TYPE.CONFIRM, '', { okButton: label, cancelButton: '返回' });
+                            if (closed || confirmed !== POPUP_RESULT.AFFIRMATIVE) return;
+                            await accountRequest(`${removalJobsPath}/${encodeURIComponent(job.id)}/${action}`, 'POST', {});
+                            toastr.success(`${label}成功`);
+                            refreshUsers();
+                            refresh();
+                        } catch (error) {
+                            summary.text(`${label}失败：${error.message}`);
+                        } finally {
+                            actions.find('button').prop('disabled', false);
+                        }
+                    });
+                };
+                if (['queued', 'blocked', 'grace'].includes(job.state)) addAction('取消任务', 'cancel', '取消此清除任务？');
+                if (job.state === 'blocked') addAction('重试通知', 'retry', '使用任务关联的原邮箱重试？是否可重试由服务器校验。');
+                list.append(row);
+            }
+            list.scrollTop(0);
+            summary.text(data.total ? `共 ${data.total} 个任务` : '暂无清除任务');
+            pageInfo.text(`第 ${page} / ${totalPages} 页`);
+            prev.prop('disabled', page <= 1);
+            next.prop('disabled', page >= totalPages);
+        } catch (error) {
+            if (!controller.signal.aborted) summary.text(`无法读取清除任务：${error.message}`);
+        } finally {
+            if (controller === request) list.attr('aria-busy', 'false');
+        }
+    }
+    template.find('.jobsRefresh').on('click', () => refresh());
+    prev.on('click', () => refresh(page - 1));
+    next.on('click', () => refresh(page + 1));
+    return { refresh, close() { closed = true; request?.abort(); } };
+}
+
+function bindMailSettings(template) {
+    const form = template.find('.mailSettingsForm');
+    const status = form.find('.mailStatus');
+    const save = form.find('.mailSave');
+    const test = form.find('.mailTest');
+    const reload = form.find('.mailRefresh');
+    const fieldset = form.find('fieldset');
+    const fields = ['host', 'port', 'secure', 'user', 'from'];
+    const labels = ['SMTP 主机', '端口', '隐式 TLS', 'SMTP 用户名', '发件人'];
+    let data;
+    let busy = false;
+    let dirty = false;
+
+    function update(message) {
+        const locked = fields.filter(key => data?.locked?.[key]);
+        const flags = data ? `SMTP ${data.configured ? '已配置' : '未配置'} · 密码${data.passwordConfigured ? '已配置' : '未配置'} · 测试收件地址${data.testRecipientConfigured ? '已配置' : '未配置'}` : '';
+        const lockText = locked.length ? `部署端锁定：${locked.map(key => labels[fields.indexOf(key)]).join('、')}` : '';
+        status.text([message, flags, lockText, dirty ? '有未保存的更改' : ''].filter(Boolean).join('。'));
+        fieldset.prop('disabled', busy || !data);
+        save.prop('disabled', busy || !data || !dirty || locked.length === fields.length);
+        test.prop('disabled', busy || dirty || !data?.configured || !data?.testRecipientConfigured);
+        reload.prop('disabled', busy);
+    }
+
+    async function read() {
+        data = await accountRequest(mailSettingsPath);
+        for (const key of fields) {
+            const field = form.find(`[name="${key}"]`);
+            const value = data.settings[key];
+            if (key === 'secure') field.prop('checked', Boolean(value));
+            else field.val(value ?? '');
+            field.prop('disabled', Boolean(data.locked?.[key]));
+        }
+        dirty = false;
+    }
+
+    async function run(progress, operation, success = '') {
+        if (busy) return;
+        busy = true;
+        update(progress);
+        let message = success;
+        try {
+            await operation();
+        } catch (error) {
+            message = error.message;
+        } finally {
+            busy = false;
+            update(message);
         }
     }
 
+    form.on('input change', 'input', () => { dirty = true; update(); });
+    form.on('submit', event => {
+        event.preventDefault();
+        if (busy || !data || !dirty) return;
+        const settings = {};
+        for (const key of fields) {
+            const field = form.find(`[name="${key}"]`);
+            const value = String(field.val() ?? '').trim();
+            if (data.locked?.[key]) continue;
+            settings[key] = key === 'secure' ? field.prop('checked') : key === 'port' ? Number(value) : value;
+        }
+        run('正在保存邮件设置…', async () => {
+            await accountRequest(mailSettingsPath, 'POST', settings);
+            data = null;
+            dirty = false;
+            await read();
+        }, '邮件设置已保存');
+    });
+    test.on('click', () => run('正在发送测试邮件…', () => accountRequest(`${mailSettingsPath}/test`, 'POST', {}), '测试邮件已提交给 SMTP 服务器'));
+    reload.on('click', async () => {
+        if (dirty) {
+            const result = await callGenericPopup('重新读取将丢弃未保存的更改。', POPUP_TYPE.CONFIRM, '', { okButton: '重新读取', cancelButton: '返回' });
+            if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+        }
+        run('正在读取邮件设置…', read);
+    });
+    return () => { if (!data) run('正在读取邮件设置…', read); };
+}
+const mailSettingsPath = '/admin/mail-settings';
+const activeBackupJobs = new Map();
+
+function bindBackup(root, handle, removal) {
+    const button = root.find('.userBackupButton');
+    const status = root.find('.accountBackupStatus');
+    const download = $('<a class="menu_button accountDownload" download hidden>').text('下载备份').insertAfter(status);
+    const cutoff = removal?.purgeAt;
+    const closedForRemoval = () => removal?.state === 'purging' || (Number.isFinite(cutoff) && cutoff <= Date.now());
+    const expiryMessage = '账户保留期已结束，无法准备或下载完整备份。';
+    let expiryTimer;
+    let busy = false;
+    let ready;
+
+    function update() {
+        const expired = closedForRemoval();
+        button.prop('disabled', busy || expired);
+        const linkExpired = ready?.expiresAt <= Date.now();
+        download.prop('hidden', expired || linkExpired || !ready);
+        if (expired || linkExpired) {
+            download.removeAttr('href');
+            status.text(expired ? expiryMessage : '备份文件已过期，请重新准备。');
+        }
+    }
+
+    function scheduleExpiry() {
+        clearTimeout(expiryTimer);
+        const deadline = Math.min(cutoff ?? Infinity, ready?.expiresAt ?? Infinity);
+        if (Number.isFinite(deadline) && deadline > Date.now()) {
+            expiryTimer = setTimeout(() => {
+                if (!root[0]?.isConnected) return;
+                update();
+                scheduleExpiry();
+            }, Math.min(deadline - Date.now(), 2_147_483_647));
+        }
+    }
+
+    download.on('click', event => {
+        update();
+        if (download.prop('hidden')) event.preventDefault();
+    });
+    button.on('click', async () => {
+        if (busy || closedForRemoval()) return;
+        busy = true;
+        ready = undefined;
+        download.removeAttr('href');
+        status.text('正在请求服务器准备备份…');
+        update();
+        try {
+            let id = activeBackupJobs.get(handle);
+            if (!id) {
+                const created = await accountRequest(backupJobsPath, 'POST', { handle });
+                id = created.id;
+                if (!id) throw new Error('服务器未返回备份任务编号。');
+                activeBackupJobs.set(handle, id);
+                if (await canViewSecrets() === false && root[0]?.isConnected) {
+                    toastr.warning('根据服务器配置，备份不包含密钥。');
+                }
+            }
+            const path = `${backupJobsPath}/${encodeURIComponent(id)}`;
+            while (root[0]?.isConnected && !closedForRemoval()) {
+                let job;
+                try {
+                    job = await accountRequest(path);
+                } catch (error) {
+                    if ([401, 403, 404, 410].includes(error.cause)) activeBackupJobs.delete(handle);
+                    throw error;
+                }
+                if (!root[0]?.isConnected || closedForRemoval()) return;
+                if (job.state === 'ready') {
+                    activeBackupJobs.delete(handle);
+                    ready = job;
+                    download.attr('href', `/api/users${path}/file`);
+                    const size = Number.isFinite(job.size) ? `（${humanFileSize(job.size)}）` : '';
+                    const expiry = job.expiresAt ? `有效至 ${accountDate(job.expiresAt)}。` : '';
+                    status.text(`备份已就绪${size}。${expiry}请使用当前有权限的登录会话下载。`);
+                    scheduleExpiry();
+                    return;
+                }
+                if (!['queued', 'running', 'preparing'].includes(job.state)) {
+                    activeBackupJobs.delete(handle);
+                    throw new Error(job.error || '服务器未能完成备份，请重试。');
+                }
+                status.text(job.state === 'queued' ? '服务器排队中…' : '服务器正在打包…');
+                await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+        } catch (error) {
+            status.text(`备份失败：${error.message}。可重试；过期文件需重新准备。`);
+        } finally {
+            busy = false;
+            update();
+        }
+    });
+    update();
+    scheduleExpiry();
+}
+
+function renderAccountIcons(root) {
+    root.find('[data-account-icon]').each(function () {
+        const icon = accountIcons[this.dataset.accountIcon];
+        if (icon) this.replaceChildren(createLucideIcon(icon, { 'aria-hidden': 'true', focusable: 'false' }));
+    });
+}
+
+function accountDate(value) {
+    return Number.isFinite(value) ? new Date(value).toLocaleString() : '无记录';
+}
+
+async function accountRequest(path, method = 'GET', body = undefined, signal = undefined) {
+    const response = await fetch(`/api/users${path}`, {
+        method,
+        headers: getRequestHeaders({ omitContentType: body === undefined }),
+        body: JSON.stringify(body),
+        signal,
+    });
+    if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        const message = smtpErrors.get(data?.code) ?? (typeof data?.message === 'string' ? data.message : data?.error);
+        const fallback = [401, 403].includes(response.status) ? '会话已失效或权限不足' : `请求失败（HTTP ${response.status}）`;
+        throw new Error(typeof message === 'string' ? message : fallback, { cause: response.status });
+    }
+    return response.status === 204 ? null : response.json().catch(error => {
+        if (response.headers.get('Content-Type')?.includes('application/json')) throw error;
+        return null;
+    });
+}
+
+async function openAdminPanel() {
     const template = $(await renderTemplateAsync('admin'));
+    if (!template.length) return;
+    renderAccountIcons(template);
+    const filters = template.find('.usersFilters');
+    const list = template.find('.usersListItems');
+    const summary = template.find('.usersResultSummary');
+    const selection = new Set();
+    const limit = 100;
+    const pageCheck = template.find('.selectAccountPage');
+    const prev = template.find('.usersPrevPage');
+    const next = template.find('.usersNextPage');
+    const pageInfo = template.find('.usersPageInfo');
+    const jobs = bindRemovalJobs(template, () => renderUsers(page));
+    const loadMail = bindMailSettings(template);
+    let page = 1;
+    let filterKey;
+    let timer;
+    let request;
+    let pageHandles = [];
+    let selectionNotice = '';
+    let previewBusy = false;
+    let closed = false;
 
-    template.find('.adminNav > button').on('click', function () {
-        const target = String($(this).data('target-tab'));
-        template.find('.navTab').each(function () {
-            $(this).toggle(this.classList.contains(target));
+    function updateSelection() {
+        const count = pageHandles.filter(handle => selection.has(handle)).length;
+        pageCheck.prop({ checked: count > 0 && count === pageHandles.length, indeterminate: count > 0 && count < pageHandles.length, disabled: !pageHandles.length || previewBusy });
+        template.find('.clearSelection, .deleteSelection').prop('disabled', !selection.size || previewBusy);
+        template.find('.accountsSelection').text(`${selectionNotice}已选 ${selection.size} / ${limit}，支持跨页`);
+        list.find('.accountSelect').each(function () {
+            this.checked = selection.has(this.value);
+            this.disabled = previewBusy || !pageHandles.includes(this.value);
         });
+        list.find('.userDelete').each(function () {
+            this.disabled = previewBusy || !pageHandles.includes($(this).closest('.userAccount').find('.accountSelect').val());
+        });
+    }
+
+    function selectHandles(handles, checked) {
+        selectionNotice = '';
+        for (const handle of handles) {
+            if (!checked) selection.delete(handle);
+            else if (selection.size < limit || selection.has(handle)) selection.add(handle);
+            else selectionNotice = '已达选择上限。';
+        }
+        updateSelection();
+    }
+
+    async function startPreview(handles) {
+        if (!handles.length || previewBusy) return;
+        previewBusy = true;
+        updateSelection();
+        try {
+            const accepted = await previewRemoval(handles, () => !closed);
+            if (accepted) {
+                for (const handle of accepted) selection.delete(handle);
+                renderUsers(page);
+            }
+        } catch (error) {
+            toastr.error(error.message, '清除任务提交失败', { escapeHtml: true });
+        } finally {
+            previewBusy = false;
+            updateSelection();
+        }
+    }
+
+    function renderUser(user) {
+        const row = template.find('.userAccountTemplate .userAccount').clone();
+        const { handle, removal } = user;
+        const refresh = () => renderUsers(page);
+        row.find('.userName').text(user.name);
+        row.find('.userHandle').text(handle);
+        row.find('.userStatus').text(user.enabled ? '已启用' : '已禁用');
+        row.find('.userRole').text(user.admin ? '管理员' : '普通用户');
+        row.find('.userPassword').text(user.password ? '有密码' : '无密码');
+        row.find('.userEmail').text(user.email || '未填写');
+        row.find('.userLastLogin').text(accountDate(user.lastLogin));
+        row.find('.userCreated').text(accountDate(user.created));
+        row.find('.userRemoval').text(removal ? `${removalStates.get(removal.state) ?? removal.state}${removal.purgeAt ? ` · 截止 ${accountDate(removal.purgeAt)}` : ''}` : user.deletionProtected ? '禁止清除' : '');
+        row.find('.avatar img').attr('src', user.avatar || 'img/ai4.png');
+        row.find('summary').attr('aria-label', `${handle} 的账户操作`);
+        row.find('.accountSelect').val(handle).attr('aria-label', `选择用户 ${handle}`).on('change', function () { selectHandles([handle], this.checked); });
+        row.find('.userDelete').on('click', () => startPreview([handle]));
+        row.find('.userEnableButton').prop('hidden', user.enabled).on('click', () => enableUser(handle, refresh));
+        row.find('.userDisableButton').prop('hidden', !user.enabled).on('click', () => disableUser(handle, refresh));
+        row.find('.userPromoteButton').prop('hidden', user.admin).on('click', () => promoteUser(handle, refresh));
+        row.find('.userDemoteButton').prop('hidden', !user.admin).on('click', () => demoteUser(handle, refresh));
+        row.find('.userChangePasswordButton').on('click', () => changePassword(handle, refresh));
+        row.find('.userChangeNameButton').on('click', () => changeName(handle, user.name, refresh));
+        row.find('.userChangeEmail').on('click', () => changeUserEmail(user, refresh));
+        bindBackup(row, handle, removal);
+        row.find('.userAvatarChange').on('click', () => row.find('.avatarUpload').trigger('click'));
+        row.find('.avatarUpload').on('change', async function () {
+            const file = this.files?.[0];
+            this.value = '';
+            if (!file) return;
+            try {
+                if (await cropAndUploadAvatar(handle, file)) refresh();
+            } catch {
+                toastr.error('无法处理该头像文件');
+            }
+        });
+        row.find('.userAvatarRemove').on('click', async () => {
+            await changeAvatar(handle, '');
+            refresh();
+        });
+        return row;
+    }
+
+    async function renderUsers(targetPage = 1, delay = 0) {
+        if (closed) return;
+        clearTimeout(timer);
+        request?.abort();
+        const formData = Object.fromEntries(new FormData(filters[0]));
+        const { loginFrom, loginTo, ...values } = formData;
+        const range = values.loginSeen === 'range';
+        const value = { ...values, search: String(values.search).trim(), loginDays: Number(values.loginDays) };
+        const from = range && loginFrom ? new Date(`${loginFrom}T00:00:00`).getTime() : undefined;
+        const end = range && loginTo ? new Date(`${loginTo}T00:00:00`) : null;
+        const to = end ? end.setDate(end.getDate() + 1) : undefined;
+        const query = { ...value, loginFrom: from, loginTo: to };
+        const key = JSON.stringify(query);
+        if (filterKey !== key) {
+            if (selection.size) selectionNotice = '筛选或排序已变更，已清空之前的选择。';
+            selection.clear();
+            targetPage = 1;
+            filterKey = key;
+        }
+        filters.find('[name="handleMatch"]').parent().prop('hidden', values.searchBy !== 'handle');
+        filters.find('[name="loginDays"]').parent().prop('hidden', !['recent', 'older'].includes(String(values.loginSeen)));
+        filters.find('[name="loginFrom"], [name="loginTo"]').parent().prop('hidden', !range);
+        list.empty().attr('aria-busy', 'true');
+        pageHandles = [];
+        prev.add(next).prop('disabled', true);
+        pageInfo.empty();
+        updateSelection();
+        if (range && (!Number.isFinite(from) || !Number.isFinite(to) || from >= to)) {
+            summary.text('请选择起始和结束日期，起始日期不能晚于结束日期。');
+            list.attr('aria-busy', 'false');
+            return;
+        }
+        summary.text('正在读取用户…');
+        const controller = new AbortController();
+        request = controller;
+        if (delay) {
+            timer = setTimeout(() => renderUsers(targetPage), delay);
+            return;
+        }
+        try {
+            const data = await accountRequest('/get', 'POST', { ...query, page: targetPage, pageSize: 25, includeAvatars: true }, controller.signal);
+            if (controller.signal.aborted || closed) return;
+            if (targetPage > Math.max(1, data.totalPages) && !data.items.length) {
+                renderUsers(Math.max(1, data.totalPages));
+                return;
+            }
+            page = data.page;
+            const totalPages = Math.max(1, data.totalPages);
+            pageHandles = data.items.filter(user => !user.deletionProtected && user.handle !== currentUser?.handle && !user.removal).map(user => user.handle);
+            for (const user of data.items) {
+                if (!pageHandles.includes(user.handle)) selection.delete(user.handle);
+                list.append(renderUser(user));
+            }
+            list.scrollTop(0);
+            summary.text(data.total ? `共 ${data.total} 个用户` : '没有符合条件的用户');
+            pageInfo.text(`第 ${page} / ${totalPages} 页`);
+            prev.prop('disabled', page <= 1);
+            next.prop('disabled', page >= totalPages);
+            updateSelection();
+        } catch (error) {
+            if (!controller.signal.aborted) summary.text(`无法读取用户：${error.message}。可按“搜索”重试。`);
+        } finally {
+            if (controller === request) list.attr('aria-busy', 'false');
+        }
+    }
+
+    pageCheck.on('change', function () { selectHandles(pageHandles, this.checked); });
+    template.find('.clearSelection').on('click', () => selectHandles(selection, false));
+    template.find('.deleteSelection').on('click', () => startPreview([...selection]));
+    prev.on('click', () => renderUsers(page - 1));
+    next.on('click', () => renderUsers(page + 1));
+    filters.on('submit', event => { event.preventDefault(); renderUsers(); });
+    filters.on('reset', () => queueMicrotask(() => renderUsers()));
+    filters.on('input', '[name="search"]', () => renderUsers(1, 280));
+    filters.on('change', 'select, input[type="date"]', () => renderUsers());
+    const nav = template.find('.adminNav button');
+    nav.on('click', function () {
+        const target = this.dataset.targetTab;
+        nav.attr('aria-pressed', 'false');
+        $(this).attr('aria-pressed', 'true');
+        template.find('.navTab').each(function () { this.hidden = !this.classList.contains(target); });
+        if (target === 'removalJobs') jobs.refresh();
+        if (target === 'mailSettings') loadMail();
     });
 
+    const handleInput = template.find('.createUserHandle');
+    let slugRevision = 0;
+    handleInput.on('input', () => { slugRevision++; });
     template.find('.createUserDisplayName').on('input', async function () {
-        const slug = await slugify(String($(this).val()));
-        template.find('.createUserHandle').val(slug);
+        const revision = ++slugRevision;
+        const slug = await slugify(this.value);
+        if (revision === slugRevision) handleInput.val(slug);
     });
-
-    template.find('.userCreateForm').on('submit', function (event) {
-        if (!(event.target instanceof HTMLFormElement)) {
-            return;
-        }
-
+    template.find('.userCreateForm').on('submit', async function (event) {
         event.preventDefault();
-        createUser(event.target, () => {
-            template.find('.manageUsersButton').trigger('click');
-            usersState.page = 1;
-            renderUsers();
-        });
-    });
-
-    template.find('.usersSearchButton').on('click', function () {
-        usersState.search = String(template.find('.usersSearch').val() ?? '').trim();
-        usersState.page = 1;
-        renderUsers();
-    });
-
-    template.find('.usersSearch').on('keydown', function (event) {
-        if (event.key !== 'Enter') {
-            return;
+        if (!(this instanceof HTMLFormElement)) return;
+        const button = $(this).find('[type="submit"]');
+        if (button.prop('disabled')) return;
+        button.prop('disabled', true);
+        try {
+            await createUser(this, () => {
+                slugRevision++;
+                nav.filter('[data-target-tab="usersList"]').trigger('click').trigger('focus');
+                renderUsers();
+            });
+        } finally {
+            button.prop('disabled', false);
         }
-
-        event.preventDefault();
-        template.find('.usersSearchButton').trigger('click');
     });
-
-    template.find('.usersClearSearchButton').on('click', function () {
-        template.find('.usersSearch').val('');
-        usersState.search = '';
-        usersState.page = 1;
-        renderUsers();
-    });
-
-    template.find('.usersPrevPage').on('click', function () {
-        if (usersState.page <= 1) {
-            return;
-        }
-
-        usersState.page -= 1;
-        renderUsers();
-    });
-
-    template.find('.usersNextPage').on('click', function () {
-        if (usersState.page >= usersState.totalPages) {
-            return;
-        }
-
-        usersState.page += 1;
-        renderUsers();
-    });
-
-    callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: 'Close', wide: true, large: true, allowVerticalScrolling: true, allowHorizontalScrolling: false });
+    const popup = callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: 'Close', wide: true, large: true, allowVerticalScrolling: true, allowHorizontalScrolling: false });
     renderUsers();
+    await popup;
+    closed = true;
+    clearTimeout(timer);
+    request?.abort();
+    jobs.close();
 }
 
 /**

@@ -10,15 +10,15 @@ import { Buffer } from 'node:buffer';
 import storage from 'node-persist';
 import express from 'express';
 import mime from 'mime-types';
-import archiver from 'archiver';
 import _ from 'lodash';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import sanitize from 'sanitize-filename';
 import ipMatching from 'ip-matching';
 
 import { USER_DIRECTORY_TEMPLATE, DEFAULT_USER, PUBLIC_DIRECTORIES, SETTINGS_FILE, UPLOADS_DIRECTORY } from './constants.js';
-import { getConfigValue, color, delay, generateTimestamp, invalidateFirefoxCache, isPathUnderParent, setPermissionsSync } from './util.js';
-import { allowKeysExposure, readSecret, writeSecret, SECRETS_FILE } from './endpoints/secrets.js';
+import { getConfigValue, color, delay, invalidateFirefoxCache, isPathUnderParent, setPermissionsSync } from './util.js';
+import { readSecret, writeSecret } from './endpoints/secrets.js';
+import { acquireUserOperation, isUserPurgeBlocked, withUserLock } from './user-operation-state.js';
 import { getContentOfType } from './endpoints/content-manager.js';
 import { serverDirectory } from './server-directory.js';
 import { filterValidIpPatterns, getIpFromRequest } from './express-common.js';
@@ -58,9 +58,10 @@ const STORAGE_KEYS = {
  * @property {string} salt - Salt used for hashing the password
  * @property {boolean} enabled - Whether the user is enabled
  * @property {boolean} admin - Whether the user is an admin (can manage other users)
+ * @property {string} [accountId] 账户实例标识，不随用户名复用
  * @property {string} [email] - The user's email address
- * @property {number} [lastLogin] - The timestamp of the user's last login
- * @property {number} [lastActivity] - The timestamp of the user's last activity
+ * @property {number | null} [lastLogin] - The timestamp of the user's last login
+ * @property {number | null} [lastActivity] - The timestamp of the user's last activity
  */
 
 /**
@@ -73,8 +74,10 @@ const STORAGE_KEYS = {
  * @property {boolean} [enabled] - Whether the user is enabled
  * @property {number} [created] - The timestamp when the user was created
  * @property {string} [email] - The user's email address
- * @property {number} [lastLogin] - The timestamp of the user's last login
- * @property {number} [lastActivity] - The timestamp of the user's last activity
+ * @property {number | null} [lastLogin] - The timestamp of the user's last login
+ * @property {number | null} [lastActivity] - The timestamp of the user's last activity
+ * @property {boolean} [deletionProtected] 是否为受保护账户
+ * @property {{state:string,purgeAt:number|null} | null} [removal] 账户清除摘要
  */
 
 /**
@@ -124,15 +127,13 @@ export async function ensurePublicDirectoriesExist() {
     }
 
     const userHandles = await getAllUserHandles();
-    const directoriesList = userHandles.map(handle => getUserDirectories(handle));
-    for (const userDirectories of directoriesList) {
-        for (const dir of Object.values(userDirectories)) {
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-        }
-    }
-    return directoriesList;
+    return userHandles.map(ensureUserDirectories);
+}
+
+export function ensureUserDirectories(handle) {
+    const directories = getUserDirectories(handle);
+    for (const dir of Object.values(directories)) fs.mkdirSync(dir, { recursive: true });
+    return directories;
 }
 
 /**
@@ -214,7 +215,13 @@ export function cleanUploads() {
             console.debug(`Cleaning uploads folder (${uploads.length} files)`);
             uploads.forEach(file => {
                 const pathToFile = path.join(uploadsPath, file);
-                fs.unlinkSync(pathToFile);
+                if (fs.lstatSync(pathToFile).isDirectory()) {
+                    if (file === DEFAULT_USER.handle || /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(file)) {
+                        fs.rmSync(pathToFile, { recursive: true, force: true });
+                    }
+                } else {
+                    fs.unlinkSync(pathToFile);
+                }
             });
         }
     } catch (err) {
@@ -567,11 +574,15 @@ export async function initUserStorage(dataRoot) {
         expiredInterval: 0,
     });
 
-    const keys = await getAllUserHandles();
+    const handles = await getAllUserHandles({ includeBlocked: true });
+    if (handles.length === 0) {
+        await storage.setItem(toKey(DEFAULT_USER.handle), { ...DEFAULT_USER, accountId: crypto.randomUUID() });
+        return;
+    }
 
-    // If there are no users, create the default user
-    if (keys.length === 0) {
-        await storage.setItem(toKey(DEFAULT_USER.handle), DEFAULT_USER);
+    for (const handle of handles) {
+        const user = await storage.getItem(toKey(handle));
+        if (user && !user.accountId) await storage.setItem(toKey(handle), { ...user, accountId: crypto.randomUUID() });
     }
 }
 
@@ -675,10 +686,25 @@ export function getCsrfSecret(request) {
  * Gets a list of all user handles.
  * @returns {Promise<string[]>} - The list of user handles
  */
-export async function getAllUserHandles() {
+export async function getAllUserHandles({ includeBlocked = false } = {}) {
     const keys = await storage.keys(x => x.key.startsWith(KEY_PREFIX));
-    const handles = keys.map(x => x.replace(KEY_PREFIX, ''));
-    return handles;
+    const handles = keys.map(x => x.slice(KEY_PREFIX.length));
+    return includeBlocked ? handles : handles.filter(handle => !isUserPurgeBlocked(handle));
+}
+
+/**
+ * 新账号不能继承旧版本遗留的同名目录。调用方应先持有同一用户名的锁。
+ * @param {string} handle 已校验的用户名
+ */
+export async function canCreateUserAccount(handle) {
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(handle) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(handle)) return false;
+    if (isUserPurgeBlocked(handle) || await storage.getItem(toKey(handle))) return false;
+    const dirs = await fs.promises.readdir(globalThis.DATA_ROOT);
+    return !dirs.some(dir => dir.toLowerCase() === handle);
+}
+
+export function forgetUserDirectories(handle) {
+    DIRECTORIES_CACHE.delete(handle);
 }
 
 /**
@@ -790,16 +816,10 @@ async function singleUserLogin(request) {
         return false;
     }
 
-    const userHandles = await getAllUserHandles();
-    if (userHandles.length === 1) {
-        const user = await storage.getItem(toKey(userHandles[0]));
-        if (user && !user.password) {
-            request.session.handle = userHandles[0];
-            request.session.version = getAccountVersion(user);
-            return true;
-        }
-    }
-    return false;
+    const userHandles = await getAllUserHandles({ includeBlocked: true });
+    if (userHandles.length !== 1) return false;
+    const user = await storage.getItem(toKey(userHandles[0]));
+    return !!user && !user.password && await establishUserSession(request, user);
 }
 
 /**
@@ -888,11 +908,7 @@ async function headerUserLogin(request, header = 'Remote-User') {
     for (const userHandle of userHandles) {
         if (remoteUser.toLowerCase() === userHandle) {
             const user = await storage.getItem(toKey(userHandle));
-            if (user && user.enabled) {
-                request.session.handle = userHandle;
-                request.session.version = getAccountVersion(user);
-                return true;
-            }
+            if (user && await establishUserSession(request, user)) return true;
         }
     }
     return false;
@@ -930,10 +946,8 @@ async function basicUserLogin(request) {
         if (username === userHandle) {
             const user = await storage.getItem(toKey(userHandle));
             // Verify pass again here just to be sure
-            if (user && user.enabled && user.password && user.password === getPasswordHash(password, user.salt)) {
-                request.session.handle = userHandle;
-                request.session.version = getAccountVersion(user);
-                return true;
+            if (user?.password && user.password === getPasswordHash(password, user.salt)) {
+                return await establishUserSession(request, user);
             }
         }
     }
@@ -948,8 +962,30 @@ async function basicUserLogin(request) {
  */
 export function getAccountVersion(user) {
     return crypto.createHash('shake256', { outputLength: 8 })
-        .update(JSON.stringify([user.handle, user.password, user.salt]))
+        .update(JSON.stringify([user.handle, user.accountId, user.password, user.salt]))
         .digest('hex');
+}
+
+/**
+ * 认证后再次读取账号，防止并行改密、停用或清除时建立旧账号的会话。
+ * @param {import('express').Request} request 当前请求
+ * @param {User} authenticatedUser 已校验身份时的快照
+ * @param {{explicit?: boolean}} [options] 是否为显式登录
+ */
+export function establishUserSession(request, authenticatedUser, { explicit = false } = {}) {
+    const { handle } = authenticatedUser;
+    return withUserLock(handle, async () => {
+        const user = await storage.getItem(toKey(handle));
+        if (!request.session || !user?.accountId || !user.enabled || isUserPurgeBlocked(handle) || getAccountVersion(user) !== getAccountVersion(authenticatedUser)) return false;
+        const lastLogin = Math.max(Date.now(), Number.isFinite(user.lastLogin) ? user.lastLogin : 0);
+        user.lastLogin = lastLogin;
+        if (explicit) user.lastActivity = lastLogin;
+        await storage.setItem(toKey(handle), user);
+        if (isUserPurgeBlocked(handle)) return false;
+        request.session.handle = handle;
+        request.session.version = getAccountVersion(user);
+        return true;
+    });
 }
 
 /**
@@ -976,45 +1012,36 @@ export async function setUserDataMiddleware(request, response, next) {
     }
 
     // If user accounts are enabled, get the user from the session
-    let handle = request.session?.handle;
+    const handle = request.session?.handle;
 
     // If we have the only user and it's not password protected, use it
     if (!handle) {
         return next();
     }
 
-    /** @type {User} */
-    const user = await storage.getItem(toKey(handle));
-
-    if (!user) {
-        console.error('User not found:', handle);
+    const release = acquireUserOperation(handle);
+    if (!release) {
+        request.session = {};
         return next();
     }
-
-    if (!user.enabled) {
-        console.error('User is disabled:', handle);
-        return next();
-    }
-
-    if (Object.hasOwn(request.session, 'version')) {
-        if (request.session.version !== getAccountVersion(user)) {
-            console.warn('User data has changed since the session was created. Invalidating session for user:', handle);
-            request.session.handle = null;
-            request.session.csrfToken = null;
-            request.session.version = null;
-            request.session = null;
-            return response.sendStatus(403);
+    try {
+        const user = await storage.getItem(toKey(handle));
+        if (response.destroyed) {
+            release();
+            return;
         }
-    } else {
-        // If there is no version in the session, it means it's an old session. Upgrade it by adding the version.
-        request.session.version = getAccountVersion(user);
+        if (!user?.enabled || isUserPurgeBlocked(handle) || request.session.version !== getAccountVersion(user)) {
+            request.session = {};
+            release();
+            return next();
+        }
+        request.user = { profile: user, directories: getUserDirectories(handle) };
+    } catch (error) {
+        release();
+        return next(error);
     }
-
-    const directories = getUserDirectories(handle);
-    request.user = {
-        profile: user,
-        directories: directories,
-    };
+    response.once('finish', release);
+    response.once('close', release);
 
     // Touch the session if loading the home page
     if (request.method === 'GET' && request.path === '/') {
@@ -1146,49 +1173,6 @@ export function requireAdminMiddleware(request, response, next) {
 }
 
 /**
- * Creates an archive of the user's data root directory.
- * @param {string} handle User handle
- * @param {import('express').Response} response Express response object to write to
- * @returns {Promise<void>} Promise that resolves when the archive is created
- */
-export async function createBackupArchive(handle, response) {
-    const directories = getUserDirectories(handle);
-
-    console.info('Backup requested for', handle);
-    const archive = archiver('zip');
-
-    archive.on('error', function (err) {
-        response.status(500).send({ error: err.message });
-    });
-
-    // On stream closed we can end the request
-    archive.on('end', function () {
-        console.info('Archive wrote %d bytes', archive.pointer());
-        response.end(); // End the Express response
-    });
-
-    const timestamp = generateTimestamp();
-
-    // Set the archive name
-    response.attachment(`${handle}-${timestamp}.zip`);
-
-    // This is the streaming magic
-    // @ts-ignore
-    archive.pipe(response);
-
-    // Append files from a sub-directory, putting its contents at the root of archive
-    const ignore = allowKeysExposure ? [] : [SECRETS_FILE, 'backups/secrets_migration_*.json'];
-    archive.glob('**/*', {
-        cwd: directories.root,
-        follow: false,
-        stat: true,
-        dot: true,
-        ignore,
-    });
-    archive.finalize();
-}
-
-/**
  * Gets all of the users.
  * @returns {Promise<User[]>}
  */
@@ -1199,8 +1183,7 @@ async function getAllUsers() {
     /**
      * @type {User[]}
      */
-    const users = await storage.values();
-    return users;
+    return await storage.values(entry => entry.key.startsWith(KEY_PREFIX));
 }
 
 /**
@@ -1209,7 +1192,7 @@ async function getAllUsers() {
  */
 export async function getAllEnabledUsers() {
     const users = await getAllUsers();
-    return users.filter(x => x.enabled);
+    return users.filter(x => x.enabled && !isUserPurgeBlocked(x.handle));
 }
 
 /**

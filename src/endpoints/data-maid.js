@@ -670,6 +670,12 @@ export class DataMaidService {
 
 export const router = express.Router();
 
+export function clearDataMaidTokens(handle) {
+    for (const [token, entry] of DataMaidService.TOKENS) {
+        if (entry.handle === handle) DataMaidService.TOKENS.delete(token);
+    }
+}
+
 router.post('/report', async (req, res) => {
     try {
         if (!req.user || !req.user.directories) {

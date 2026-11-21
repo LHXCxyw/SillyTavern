@@ -1,9 +1,8 @@
 import crypto from 'node:crypto';
 
-import nodemailer from 'nodemailer';
 import storage from 'node-persist';
 
-import { getConfigValue } from './util.js';
+import { normalizeNotificationAddress, sendSmtpEmail } from './smtp-service.js';
 
 const CODE_EXPIRATION_MINUTES = 10;
 const EMAIL_CODE_PREFIX = 'email_code:';
@@ -71,44 +70,17 @@ export async function sendPasswordResetEmail(email, code) {
 }
 
 async function sendEmail({ email, code, subject, title, intro, warning }) {
-    const normalizedEmail = normalizeEmail(email);
+    const normalizedEmail = normalizeNotificationAddress(String(email ?? ''))?.toLowerCase();
     if (!isQQEmail(normalizedEmail)) {
         throw new Error('必须使用QQ邮箱');
     }
 
-    const config = getSmtpConfig();
-    const transporter = nodemailer.createTransport({
-        host: config.host,
-        port: config.port,
-        secure: config.secure,
-        auth: {
-            user: config.user,
-            pass: config.pass,
-        },
-    });
-
-    await transporter.sendMail({
-        from: config.from,
-        to: normalizedEmail,
+    await sendSmtpEmail({
+        email: normalizedEmail,
         subject,
         text: `您的验证码是：${code}。此验证码将在${CODE_EXPIRATION_MINUTES}分钟后过期。`,
         html: buildEmailHtml({ code, title, intro, warning }),
     });
-}
-
-function getSmtpConfig() {
-    const host = process.env.SMTP_HOST || getConfigValue('smtp.host', '');
-    const port = Number(process.env.SMTP_PORT || getConfigValue('smtp.port', 465, 'number'));
-    const secure = parseBoolean(process.env.SMTP_SECURE, getConfigValue('smtp.secure', true, 'boolean'));
-    const user = process.env.SMTP_USER || getConfigValue('smtp.user', '');
-    const pass = process.env.SMTP_PASS || getConfigValue('smtp.pass', '');
-    const from = process.env.SMTP_FROM || getConfigValue('smtp.from', user);
-
-    if (!host || !user || !pass || !from) {
-        throw new Error('SMTP配置缺失，请设置SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM或config.yaml中的smtp配置');
-    }
-
-    return { host, port, secure, user, pass, from };
 }
 
 function buildEmailHtml({ code, title, intro, warning }) {
@@ -117,12 +89,4 @@ function buildEmailHtml({ code, title, intro, warning }) {
 
 function normalizeEmail(email) {
     return String(email ?? '').trim().toLowerCase();
-}
-
-function parseBoolean(value, fallback) {
-    if (value === undefined || value === null || value === '') {
-        return fallback;
-    }
-
-    return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 }

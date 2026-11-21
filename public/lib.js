@@ -26,6 +26,12 @@ import * as chevrotain from 'chevrotain';
 import { gzipSync, gzip } from 'fflate';
 import { sha256 } from 'js-sha256';
 
+export {
+    createElement as createLucideIcon, ArrowDown, ArrowUp, Ban, Camera, Check, Clock,
+    Download, Image, ImageOff, KeyRound, Lock, LockOpen, Mail, Pencil, Search,
+    Settings, Skull, Trash2, TriangleAlert, UserPlus, Users,
+} from 'lucide';
+
 /**
  * Expose the libraries to the 'window' object.
  * Needed for compatibility with old extensions.

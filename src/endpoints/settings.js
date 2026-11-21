@@ -24,9 +24,14 @@ const AUTOSAVE_INTERVAL = 10 * 60 * 1000;
 
 /**
  * Map of functions to trigger settings autosave for a user.
- * @type {Map<string, function>}
+ * @type {Map<string, import('lodash').DebouncedFunc<() => void>>}
  */
 const AUTOSAVE_FUNCTIONS = new Map();
+
+export function clearSettingsBackupTimer(handle) {
+    AUTOSAVE_FUNCTIONS.get(handle)?.cancel();
+    AUTOSAVE_FUNCTIONS.delete(handle);
+}
 
 /**
  * Triggers autosave for a user every 10 minutes.

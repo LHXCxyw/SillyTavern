@@ -82,6 +82,15 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
  */
 const backupFunctions = new Map();
 
+export function clearChatBackupTimers(handle) {
+    const prefix = `${handle} `;
+    for (const [key, backup] of backupFunctions) {
+        if (!key.startsWith(prefix)) continue;
+        backup.cancel();
+        backupFunctions.delete(key);
+    }
+}
+
 /**
  * Gets a backup function for a user and chat.
  * Throttling is keyed per user and chat so that rapid saves in one chat cannot

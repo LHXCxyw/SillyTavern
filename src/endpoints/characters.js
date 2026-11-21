@@ -158,6 +158,19 @@ class DiskCache {
 
 export const diskCache = new DiskCache();
 
+export async function clearUserCharacterCache(handle, directories) {
+    const prefix = path.resolve(directories.characters) + path.sep;
+    const belongsToUser = key => path.resolve(key).startsWith(prefix);
+    diskCache.syncQueue.delete(handle);
+    for (const key of memoryCache.keys()) {
+        if (belongsToUser(key)) memoryCache.delete(key);
+    }
+    if (!fs.existsSync(diskCache.cachePath)) return;
+    const cache = await diskCache.instance();
+    const keys = await cache.keys(entry => typeof entry.key === 'string' && belongsToUser(entry.key));
+    for (const key of keys) await cache.removeItem(key);
+}
+
 /**
  * Gets the cache key for the specified image file.
  * @param {string} inputFile - Path to the image file

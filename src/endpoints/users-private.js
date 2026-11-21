@@ -6,7 +6,9 @@ import storage from 'node-persist';
 import express from 'express';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 
-import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, createBackupArchive, ensurePublicDirectoriesExist, toAvatarKey, getAccountVersion } from '../users.js';
+import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, ensureUserDirectories, toAvatarKey, getAccountVersion } from '../users.js';
+import { getUserRemoval } from '../user-lifecycle.js';
+import { isUserPurgeBlocked, withUserLock } from '../user-operation-state.js';
 import { SETTINGS_FILE } from '../constants.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { color, Cache, getConfigValue } from '../util.js';
@@ -15,223 +17,102 @@ import { getIpAddress, retryAfter } from '../express-common.js';
 const RESET_POINTS = getConfigValue('rateLimiting.accountsResetMaxAttempts', 5, 'number');
 const PREFER_REAL_IP_HEADER = getConfigValue('rateLimiting.preferRealIpHeader', false, 'boolean');
 const RESET_CACHE = new Cache(5 * 60 * 1000);
-
 const generateResetCode = () => Array.from({ length: 6 }, () => crypto.randomInt(0, 10)).join('');
-
-export const router = express.Router();
 const resetLimiter = new RateLimiterMemory({
     points: RESET_POINTS > 0 ? RESET_POINTS : Number.MAX_SAFE_INTEGER,
     duration: 300,
 });
 
-router.post('/logout', async (request, response) => {
-    try {
-        if (!request.session) {
-            console.error('Session not available');
-            return response.sendStatus(500);
-        }
+export const router = express.Router();
 
-        request.session.handle = null;
-        request.session.csrfToken = null;
-        request.session.version = null;
-        request.session = null;
-        return response.sendStatus(204);
-    } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
-    }
+router.post('/logout', (request, response) => {
+    request.session = null;
+    return response.sendStatus(204);
 });
 
 router.get('/me', async (request, response) => {
     try {
-        if (!request.user) {
-            return response.sendStatus(403);
-        }
-
         const user = request.user.profile;
-        const viewModel = {
+        return response.set('Cache-Control', 'private, no-store').json({
             handle: user.handle,
             name: user.name,
             avatar: await getUserAvatar(user.handle),
             admin: user.admin,
-            password: !!user.password,
+            password: Boolean(user.password),
             created: user.created,
-        };
-
-        return response.json(viewModel);
+            removal: getUserRemoval(user.handle),
+        });
     } catch (error) {
-        console.error(error);
+        console.error('读取账号信息失败:', error);
         return response.sendStatus(500);
     }
 });
 
-router.post('/change-avatar', async (request, response) => {
-    try {
-        if (!request.body.handle) {
-            console.warn('Change avatar failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
+function editAccount(action) {
+    return async (request, response) => {
+        const handle = request.body?.handle;
+        if (typeof handle !== 'string' || !handle) return response.status(400).json({ error: '用户名无效' });
+        if (handle !== request.user.profile.handle && !request.user.profile.admin) return response.sendStatus(403);
+        try {
+            return await withUserLock(handle, async () => {
+                const user = await storage.getItem(toKey(handle));
+                if (!user) return response.status(404).json({ error: '账号不存在' });
+                if (isUserPurgeBlocked(handle)) return response.status(409).json({ error: '账号已到清除截止时间' });
+                return await action(user, request, response);
+            });
+        } catch (error) {
+            console.error('更新账号设置失败:', error);
+            return response.sendStatus(500);
         }
+    };
+}
 
-        if (request.body.handle !== request.user.profile.handle && !request.user.profile.admin) {
-            console.error('Change avatar failed: Unauthorized');
-            return response.status(403).json({ error: 'Unauthorized' });
-        }
-
-        // Avatar is not a data URL or not an empty string
-        if (!request.body.avatar.startsWith('data:image/') && request.body.avatar !== '') {
-            console.warn('Change avatar failed: Invalid data URL');
-            return response.status(400).json({ error: 'Invalid data URL' });
-        }
-
-        /** @type {import('../users.js').User} */
-        const user = await storage.getItem(toKey(request.body.handle));
-
-        if (!user) {
-            console.error('Change avatar failed: User not found');
-            return response.status(404).json({ error: 'User not found' });
-        }
-
-        await storage.setItem(toAvatarKey(request.body.handle), request.body.avatar);
-
-        return response.sendStatus(204);
-    } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
+router.post('/change-avatar', editAccount(async (user, request, response) => {
+    const { avatar } = request.body;
+    if (typeof avatar !== 'string' || (avatar && !avatar.startsWith('data:image/'))) {
+        return response.status(400).json({ error: '头像格式无效' });
     }
-});
+    await storage.setItem(toAvatarKey(user.handle), avatar);
+    return response.sendStatus(204);
+}));
 
-router.post('/change-password', async (request, response) => {
-    try {
-        if (!request.body.handle) {
-            console.warn('Change password failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
-        }
-
-        if (request.body.handle !== request.user.profile.handle && !request.user.profile.admin) {
-            console.error('Change password failed: Unauthorized');
-            return response.status(403).json({ error: 'Unauthorized' });
-        }
-
-        /** @type {import('../users.js').User} */
-        const user = await storage.getItem(toKey(request.body.handle));
-
-        if (!user) {
-            console.error('Change password failed: User not found');
-            return response.status(404).json({ error: 'User not found' });
-        }
-
-        if (!user.enabled) {
-            console.error('Change password failed: User is disabled');
-            return response.status(403).json({ error: 'User is disabled' });
-        }
-
-        if (!request.user.profile.admin && user.password && user.password !== getPasswordHash(request.body.oldPassword, user.salt)) {
-            console.error('Change password failed: Incorrect password');
-            return response.status(403).json({ error: 'Incorrect password' });
-        }
-
-        if (request.body.newPassword) {
-            const salt = getPasswordSalt();
-            user.password = getPasswordHash(request.body.newPassword, salt);
-            user.salt = salt;
-        } else {
-            user.password = '';
-            user.salt = '';
-        }
-
-        await storage.setItem(toKey(request.body.handle), user);
-
-        // Update session version to keep the current session valid after password change
-        if (request.session && request.session.handle === user.handle) {
-            request.session.version = getAccountVersion(user);
-        }
-
-        return response.sendStatus(204);
-    } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
+router.post('/change-password', editAccount(async (user, request, response) => {
+    const { oldPassword, newPassword } = request.body;
+    if (!user.enabled) return response.status(403).json({ error: '账号已禁用' });
+    if (newPassword !== undefined && typeof newPassword !== 'string') return response.status(400).json({ error: '密码格式无效' });
+    if (!request.user.profile.admin && user.password && (typeof oldPassword !== 'string' || user.password !== getPasswordHash(oldPassword, user.salt))) {
+        return response.status(403).json({ error: '当前密码不正确' });
     }
-});
-
-router.post('/backup', async (request, response) => {
-    try {
-        const allowFullDataBackup = !!getConfigValue('backups.allowFullDataBackup', true, 'boolean');
-
-        if (!allowFullDataBackup) {
-            console.warn('Backup failed: Full data backup is disabled in configuration');
-            return response.status(403).json({ error: 'Full data backup is disabled' });
-        }
-
-        const handle = request.body.handle;
-
-        if (!handle || typeof handle !== 'string') {
-            console.warn('Backup failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
-        }
-
-        if (handle !== request.user.profile.handle && !request.user.profile.admin) {
-            console.error('Backup failed: Unauthorized');
-            return response.status(403).json({ error: 'Unauthorized' });
-        }
-
-        if (handle !== request.user.profile.handle && !(await storage.getItem(toKey(handle)))) {
-            console.warn('Backup failed: User not found');
-            return response.status(404).json({ error: 'User not found' });
-        }
-
-        await createBackupArchive(handle, response);
-    } catch (error) {
-        console.error('Backup failed', error);
-        return response.sendStatus(500);
+    const previousVersion = getAccountVersion(user);
+    user.salt = newPassword ? getPasswordSalt() : '';
+    user.password = newPassword ? getPasswordHash(newPassword, user.salt) : '';
+    await storage.setItem(toKey(user.handle), user);
+    if (request.session?.handle === user.handle && request.session.version === previousVersion) {
+        request.session.version = getAccountVersion(user);
     }
-});
+    return response.sendStatus(204);
+}));
+
+router.post('/change-name', editAccount(async (user, request, response) => {
+    const { name } = request.body;
+    if (typeof name !== 'string' || !name.trim()) return response.status(400).json({ error: '显示名无效' });
+    user.name = name.trim();
+    await storage.setItem(toKey(user.handle), user);
+    return response.sendStatus(204);
+}));
 
 router.post('/reset-settings', async (request, response) => {
     try {
-        const password = request.body.password;
-
-        if (request.user.profile.password && request.user.profile.password !== getPasswordHash(password, request.user.profile.salt)) {
-            console.warn('Reset settings failed: Incorrect password');
-            return response.status(403).json({ error: 'Incorrect password' });
+        const password = request.body?.password;
+        const user = request.user.profile;
+        if (user.password && (typeof password !== 'string' || user.password !== getPasswordHash(password, user.salt))) {
+            return response.status(403).json({ error: '当前密码不正确' });
         }
-
-        const pathToFile = path.join(request.user.directories.root, SETTINGS_FILE);
-        await fsPromises.rm(pathToFile, { force: true });
+        await fsPromises.rm(path.join(request.user.directories.root, SETTINGS_FILE), { force: true });
         await checkForNewContent([request.user.directories], [CONTENT_TYPES.SETTINGS]);
-
         return response.sendStatus(204);
     } catch (error) {
-        console.error('Reset settings failed', error);
-        return response.sendStatus(500);
-    }
-});
-
-router.post('/change-name', async (request, response) => {
-    try {
-        if (!request.body.name || !request.body.handle) {
-            console.warn('Change name failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
-        }
-
-        if (request.body.handle !== request.user.profile.handle && !request.user.profile.admin) {
-            console.error('Change name failed: Unauthorized');
-            return response.status(403).json({ error: 'Unauthorized' });
-        }
-
-        /** @type {import('../users.js').User} */
-        const user = await storage.getItem(toKey(request.body.handle));
-
-        if (!user) {
-            console.warn('Change name failed: User not found');
-            return response.status(404).json({ error: 'User not found' });
-        }
-
-        user.name = request.body.name;
-        await storage.setItem(toKey(request.body.handle), user);
-
-        return response.sendStatus(204);
-    } catch (error) {
-        console.error('Change name failed', error);
+        console.error('重置用户设置失败:', error);
         return response.sendStatus(500);
     }
 });
@@ -240,72 +121,51 @@ router.post('/reset-step1', async (request, response) => {
     try {
         const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
         const rateLimit = await resetLimiter.get(ip);
-
-        // Check for existing rate limits, but allow requesting a new code unless locked out
-        if (rateLimit !== null && rateLimit.consumedPoints > resetLimiter.points) {
-            throw rateLimit;
-        }
-
+        if (rateLimit !== null && rateLimit.consumedPoints > resetLimiter.points) throw rateLimit;
+        const user = request.user.profile;
         const resetCode = generateResetCode();
-        console.log();
-        console.log(color.magenta(`${request.user.profile.name}, your account reset code is: `) + color.red(resetCode));
-        console.log();
-        RESET_CACHE.set(request.user.profile.handle, resetCode);
+        console.log(color.magenta(`${user.name}，账号数据重置验证码：`) + color.red(resetCode));
+        RESET_CACHE.set(user.accountId ?? user.handle, resetCode);
         return response.sendStatus(204);
     } catch (error) {
         if (error instanceof RateLimiterRes) {
-            console.error('Reset step 1 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
-            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or contact your admin.' });
+            return retryAfter(response, error).status(429).json({ error: '尝试次数过多，请稍后再试或联系管理员' });
         }
-
-        console.error('Reset step 1 failed:', error);
+        console.error('生成重置验证码失败:', error);
         return response.sendStatus(500);
     }
 });
 
 router.post('/reset-step2', async (request, response) => {
+    const { code, password } = request.body ?? {};
+    const user = request.user.profile;
+    if (typeof code !== 'string' || !code) return response.status(400).json({ error: '缺少重置验证码' });
+    if (user.password && (typeof password !== 'string' || user.password !== getPasswordHash(password, user.salt))) {
+        return response.status(400).json({ error: '当前密码不正确' });
+    }
     try {
-        if (!request.body.code) {
-            console.warn('Reset step 2 failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
-        }
-
-        if (request.user.profile.password && request.user.profile.password !== getPasswordHash(request.body.password, request.user.profile.salt)) {
-            console.warn('Reset step 2 failed: Incorrect password');
-            return response.status(400).json({ error: 'Incorrect password' });
-        }
-
         const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
-        const rateLimit = await resetLimiter.get(ip);
-
-        if (rateLimit !== null && rateLimit.consumedPoints > resetLimiter.points) {
-            throw rateLimit;
-        }
-
-        const code = RESET_CACHE.get(request.user.profile.handle);
-
-        if (!code || code !== request.body.code) {
-            await resetLimiter.consume(ip);
-            console.warn('Reset step 2 failed: Incorrect code');
-            return response.status(400).json({ error: 'Incorrect code' });
-        }
-
-        console.info('Resetting account data:', request.user.profile.handle);
-        await fsPromises.rm(request.user.directories.root, { recursive: true, force: true });
-
-        await ensurePublicDirectoriesExist();
-        await checkForNewContent([request.user.directories]);
-
-        await resetLimiter.delete(ip);
-        RESET_CACHE.remove(request.user.profile.handle);
-        return response.sendStatus(204);
+        return await withUserLock(user.handle, async () => {
+            if (isUserPurgeBlocked(user.handle)) return response.sendStatus(403);
+            const rateLimit = await resetLimiter.get(ip);
+            if (rateLimit !== null && rateLimit.consumedPoints > resetLimiter.points) throw rateLimit;
+            const identity = user.accountId ?? user.handle;
+            if (code !== RESET_CACHE.get(identity)) {
+                await resetLimiter.consume(ip);
+                return response.status(400).json({ error: '验证码错误' });
+            }
+            RESET_CACHE.remove(identity);
+            await fsPromises.rm(request.user.directories.root, { recursive: true, force: true });
+            ensureUserDirectories(user.handle);
+            await checkForNewContent([request.user.directories]);
+            await resetLimiter.delete(ip);
+            return response.sendStatus(204);
+        });
     } catch (error) {
         if (error instanceof RateLimiterRes) {
-            console.error('Reset step 2 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
-            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or contact your admin.' });
+            return retryAfter(response, error).status(429).json({ error: '尝试次数过多，请稍后再试或联系管理员' });
         }
-
-        console.error('Reset step 2 failed:', error);
+        console.error('重置账号数据失败:', error);
         return response.sendStatus(500);
     }
 });

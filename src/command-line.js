@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import yargs from 'yargs/yargs';
 import { hideBin } from 'yargs/helpers';
 import ipRegex from 'ip-regex';
@@ -107,7 +108,9 @@ export class CommandLineParser {
      * @returns {CommandLineArguments} Parsed command line arguments.
      */
     parse(args) {
+        const packageVersion = createRequire(import.meta.url)('../package.json').version;
         const cliArguments = yargs(hideBin(args))
+            .version(packageVersion)
             .usage('Usage: <your-start-script> [options]\nOptions that are not provided will be filled with config values.')
             .option('global', {
                 type: 'boolean',

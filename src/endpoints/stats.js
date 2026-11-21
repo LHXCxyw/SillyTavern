@@ -9,6 +9,7 @@ const readFile = fs.promises.readFile;
 const readdir = fs.promises.readdir;
 
 import { getAllUserHandles, getUserDirectories } from '../users.js';
+import { acquireUserOperation } from '../user-operation-state.js';
 
 const STATS_FILE = 'stats.json';
 
@@ -35,6 +36,11 @@ const STATS = new Map();
  * @type {Map<string, number>} The timestamps for each user.
  */
 const TIMESTAMPS = new Map();
+
+export function clearUserStats(handle) {
+    STATS.delete(handle);
+    TIMESTAMPS.delete(handle);
+}
 
 /**
  * Convert a timestamp to an integer timestamp.
@@ -195,13 +201,17 @@ async function saveStatsToFile() {
         const charStats = STATS.get(handle);
         const lastSaveTimestamp = TIMESTAMPS.get(handle) || 0;
         if (charStats.timestamp > lastSaveTimestamp) {
+            const release = acquireUserOperation(handle);
+            if (!release) continue;
             try {
                 const directories = getUserDirectories(handle);
                 const statsFilePath = path.join(directories.root, STATS_FILE);
                 await writeFileAtomic(statsFilePath, JSON.stringify(charStats));
                 TIMESTAMPS.set(handle, Date.now());
             } catch (error) {
-                console.error('Failed to save stats to file.', error);
+                console.error('保存用户统计失败:', error);
+            } finally {
+                release();
             }
         }
     }

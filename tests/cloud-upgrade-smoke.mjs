@@ -54,7 +54,9 @@ function session(baseUrl) {
         }
         const response = await fetch(`${baseUrl}${route}`, {
             method, headers: outgoing, body,
-            redirect: 'error', signal: AbortSignal.timeout(15_000),
+            redirect: 'error', signal: AbortSignal.timeout(90_000),
+        }).catch(error => {
+            throw new Error(`${method} ${route} 请求失败`, { cause: error });
         });
         for (const cookie of response.headers.getSetCookie()) {
             const pair = cookie.split(';', 1)[0];
@@ -281,6 +283,8 @@ try {
         smtp: { host: '', user: '', from: '', testRecipient: '' },
         userLifecycle: { paused: false },
     });
+    // 两次完整下载会包含内置素材；只调整回环测试的速率，不改生产限速。
+    config.backups.fullData.bytesPerSecond = 8 * 1024 ** 2;
     await writeFile(configPath, YAML.stringify(config));
     await startServer();
     const baseUrl = `http://${host}:${port}`;

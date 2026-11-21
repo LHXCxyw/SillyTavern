@@ -288,16 +288,12 @@ export class CommandLineParser {
         }
         initConfig(configPath);
 
-        const dataRoot = isGlobal
+        const configuredDataRoot = isGlobal
             ? defaultConfig.dataRoot
             : (cliArguments.dataRoot ?? getConfigValue('dataRoot', defaultConfig.dataRoot));
-        try {
-            if (!fs.existsSync(dataRoot)) {
-                fs.mkdirSync(dataRoot, { recursive: true });
-            }
-        } catch (err) {
-            console.warn(color.yellow(`Warning: Failed to create data root directory at ${dataRoot}. Please make sure the path is correct and writable.`), err);
-        }
+        fs.mkdirSync(configuredDataRoot, { recursive: true });
+        // 从部署方指定的数据根解析规范路径，兼容 Windows 的 8.3 短路径；租户子目录仍须独立校验。
+        const dataRoot = fs.realpathSync.native(configuredDataRoot);
 
         /** @type {CommandLineArguments} */
         const result = {

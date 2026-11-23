@@ -4,7 +4,8 @@ import storage from 'node-persist';
 import express from 'express';
 import lodash from 'lodash';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
-import { KEY_PREFIX, toKey, requireAdminMiddleware, getUserAvatar, getPasswordSalt, getPasswordHash, canCreateUserAccount, ensureUserDirectories } from '../users.js';
+import { toKey, requireAdminMiddleware, getUserAvatar, getPasswordSalt, getPasswordHash, canCreateUserAccount, ensureUserDirectories, saveUserRecord } from '../users.js';
+import { getAllAccounts } from '../account-store.js';
 import { DEFAULT_USER } from '../constants.js';
 import { parseAdminUserQuery } from '../admin-user-list.js';
 import { getUserRemoval, hasActiveUserRemoval } from '../user-lifecycle.js';
@@ -26,7 +27,7 @@ router.post('/get', requireAdminMiddleware, async (request, response) => {
     }
     try {
         const { page, pageSize, includeAvatars, match, compare } = query;
-        const users = await storage.values(entry => entry.key.startsWith(KEY_PREFIX));
+        const users = getAllAccounts();
         const filtered = users.map(user => ({ user, removal: getUserRemoval(user.handle) }))
             .filter(({ user, removal }) => match(user, removal))
             .sort((first, second) => compare(first.user, second.user));
@@ -50,6 +51,35 @@ router.post('/get', requireAdminMiddleware, async (request, response) => {
         return response.json({ items, total, page: safePage, pageSize, totalPages });
     } catch (error) {
         console.error('读取用户列表失败:', error);
+        return response.sendStatus(500);
+    }
+});
+
+/**
+ * 读取单个账户头像。管理员列表只在图像进入可见区域时请求此接口，
+ * 避免把 base64 一次性塞进列表响应。
+ */
+router.get('/avatar/:handle', requireAdminMiddleware, async (request, response) => {
+    const handle = String(request.params.handle ?? '').trim();
+    if (!handle || handle.length > 255 || /[\\/]/.test(handle) || handle.includes('..')) {
+        return response.sendStatus(400);
+    }
+    try {
+        const user = await storage.getItem(toKey(handle));
+        if (!user || isUserPurgeBlocked(handle)) {
+            return response.sendStatus(404);
+        }
+        const avatar = await getUserAvatar(handle);
+        const match = typeof avatar === 'string' ? /^data:([^;,]+);base64,(.+)$/s.exec(avatar) : null;
+        if (!match) {
+            return response.sendStatus(404);
+        }
+        response.set('Cache-Control', 'private, no-store');
+        response.set('X-Content-Type-Options', 'nosniff');
+        response.type(match[1]);
+        return response.send(Buffer.from(match[2], 'base64'));
+    } catch (error) {
+        console.error('读取用户头像失败:', error);
         return response.sendStatus(500);
     }
 });
@@ -86,7 +116,7 @@ for (const [action, mutate] of Object.entries(accountActions)) {
                 if (isUserPurgeBlocked(handle)) return response.status(409).json({ error: '账号已到清除截止时间' });
                 const error = mutate(user, request.user.profile, request.body);
                 if (error) return response.status(409).json({ error });
-                await storage.setItem(toKey(handle), user);
+                await saveUserRecord(user);
                 return response.sendStatus(204);
             });
         } catch (error) {
@@ -121,8 +151,8 @@ router.post('/create', requireAdminMiddleware, async (request, response) => {
                 enabled: true,
                 email: address,
             };
-            await checkForNewContent([ensureUserDirectories(handle)], [CONTENT_TYPES.SETTINGS]);
-            await storage.setItem(toKey(handle), user);
+            await checkForNewContent([ensureUserDirectories(handle)], [CONTENT_TYPES.SETTINGS], { strict: true });
+            await saveUserRecord(user);
             return response.json({ handle });
         });
     } catch (error) {

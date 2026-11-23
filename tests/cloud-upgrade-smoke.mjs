@@ -120,6 +120,25 @@ async function smoke(baseUrl, dataRoot) {
     assert.ok(Number.isSafeInteger(recent.lastLogin));
     assert.deepEqual((await users({ ...filters, loginSeen: 'never' })).map(row => row.handle), [untouched]);
     await user.post('/get', {}, 403);
+    const plainList = await (await admin.post('/get', { ...filters, includeAvatars: false })).json();
+    assert.ok(plainList.items.every(item => !String(item.avatar).startsWith('data:')), '分页列表不得内联头像 base64');
+    const avatarResponse = await admin.request(`/api/users/avatar/${encodeURIComponent(target)}`);
+    assert.ok([200, 404].includes(avatarResponse.status), '管理员头像接口应返回图片或 404');
+    await avatarResponse.body?.cancel();
+    await user.request(`/api/users/avatar/${encodeURIComponent(target)}`, { status: 403 });
+    const me = await user.json('/api/users/me');
+    assert.ok(!String(me.avatar).startsWith('data:'), '账户信息不得内联头像 base64');
+    // 首屏不再内联全部 OpenAI 预设，未选中的预设内容按需加载。
+    const presetName = 'cloud-smoke-preset';
+    await user.json('/api/presets/save', { method: 'POST', body: { apiId: 'openai', name: presetName, preset: { temperature: 0.5 } } });
+    const settingsPayload = await user.json('/api/settings/get', { method: 'POST', body: {} });
+    const presetIndex = settingsPayload.openai_setting_names.indexOf(presetName);
+    assert.ok(presetIndex >= 0, '新预设应出现在名称列表');
+    assert.equal(settingsPayload.openai_settings[presetIndex], null, '未选中的预设内容不应随首屏下发');
+    assert.equal(settingsPayload.openai_settings.filter(item => item !== null).length, 1, '首屏只保留当前预设内容');
+    const lazyPreset = await user.json('/api/presets/get', { method: 'POST', body: { apiId: 'openai', name: presetName } });
+    assert.equal(lazyPreset.temperature, 0.5, '按需加载应返回完整预设内容');
+    await user.request('/api/presets/delete', { method: 'POST', body: { apiId: 'openai', name: presetName } });
     assert.equal((await admin.json('/version')).pkgVersion, '1.19.1');
     await (await anonymous.request('/register')).body.cancel();
     const upload = new FormData();

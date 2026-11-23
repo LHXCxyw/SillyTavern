@@ -19,6 +19,8 @@ SillyTavern provides a single unified interface for many LLM APIs (KoboldAI/CPP,
 
 We have a [Documentation website](https://docs.sillytavern.app/) to answer most of your questions and help you get started.
 
+> This fork focuses on self-hosted, multi-user deployments. For Linux setup, Docker, and SMTP settings specific to this fork, see the [cloud deployment guide (简体中文)](../README.md).
+
 ## What is SillyTavern?
 
 SillyTavern (or ST for short) is a locally installed user interface that allows you to interact with text generation LLMs, image generation engines, and TTS voice models.

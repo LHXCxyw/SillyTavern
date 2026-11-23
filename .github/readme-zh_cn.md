@@ -1,5 +1,5 @@
 > [!IMPORTANT]  
-> 这里的信息可能已经过时或不完整，仅供您参考。请使用英文版本获取最新信息。
+> 此页主要介绍上游 SillyTavern。Linux 云端多用户部署及邮件配置以本分支的[云端部署指南](../README.md)为准。
 
 <a name="readme-top"></a>
 
@@ -64,7 +64,9 @@ SillyTavern 于 2023 年 2 月作为 TavernAI 1.2.8 的一个分支开始，如�
 
 ## 安装
 
-有关详细的安装说明，请访问我们的文档：
+本分支主要优化云端多用户自托管。部署本仓库时，请先看[云端部署指南](../README.md)：包含 Linux 的 `config.yaml`、HTTPS 反代、Docker、SMTP 和首个管理员初始化。
+
+以下是上游 SillyTavern 的通用安装指南：
 
 * **[Windows 安装指南](https://docs.sillytavern.app/installation/windows/)**
 * **[MacOS/Linux 安装指南](https://docs.sillytavern.app/installation/linuxmacos/)**

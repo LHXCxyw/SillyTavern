@@ -113,13 +113,14 @@ enableDiscreetLogin: false
 perUserBasicAuth: false
 
 # -- 管理员邮件与账户清除 --
-# SMTP 密码仅从进程环境 SMTP_PASS 读取。升级前，把旧 smtp.pass 迁入部署密钥。
 # STARTTLS 使用 secure: false；所有连接都要求 TLS 且验证证书。
 smtp:
   host: ''
   port: 465
   secure: true
   user: ''
+  # 只在私有运行配置中填写授权码；非空 SMTP_PASS 环境变量优先。
+  pass: ''
   from: ''
   # 为空时只允许部署端指定的 host / port / secure 组合。
   # 可选项示例：[{ host: 'smtp.example.org', port: 465, secure: true }]

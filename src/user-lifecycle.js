@@ -4,9 +4,10 @@ import path from 'node:path';
 import storage from 'node-persist';
 import writeFileAtomic from 'write-file-atomic';
 import { DEFAULT_USER } from './constants.js';
-import { normalizeNotificationAddress, sendAccountRemovalNotice } from './smtp-service.js';
+import { normalizeNotificationAddress, sendAccountRemovalCancellationNotice, sendAccountRemovalNotice } from './smtp-service.js';
 import { toKey } from './users.js';
 import { getConfigValue } from './util.js';
+import { recordAccount } from './account-store.js';
 import { abortUserOperations, isUserPurgeBlocked, setUserPurgeDeadline, waitForUserOperations, withUserLock } from './user-operation-state.js';
 
 const HOURS = 168;
@@ -26,7 +27,16 @@ const timed = job => job.state === 'grace' || job.state === 'purging';
 const isText = value => typeof value === 'string' && value.length > 0;
 const timestamp = value => Number.isSafeInteger(value) && value >= 0;
 const emailValue = user => typeof user?.email === 'string' ? user.email : '';
-const publicJob = ({ id, handle, state, reason, purgeAt, acceptedAt, createdAt }) => ({ id, handle, state, reason, purgeAt, acceptedAt, createdAt });
+const publicJob = (job, includeEmail = false) => ({
+    id: job.id,
+    handle: job.handle,
+    state: job.state,
+    reason: job.reason,
+    purgeAt: job.purgeAt,
+    acceptedAt: job.acceptedAt,
+    createdAt: job.createdAt,
+    ...(includeEmail ? { email: job.email ?? null } : {}),
+});
 
 export function isRemovalHandle(value) {
     return typeof value === 'string' && /^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$/i.test(value) && value.length <= 255;
@@ -45,9 +55,13 @@ export async function createUserLifecycle({
     dataRoot = globalThis.DATA_ROOT,
     now = () => Date.now(),
     sendNotice = sendAccountRemovalNotice,
+    sendCancellationNotice = sendAccountRemovalCancellationNotice,
     paused = () => getConfigValue('userLifecycle.paused', false, 'boolean'),
     readUser = handle => storage.getItem(toKey(handle)),
-    writeUser = user => storage.setItem(toKey(user.handle), user),
+    writeUser = async user => {
+        await storage.setItem(toKey(user.handle), user);
+        recordAccount(user);
+    },
     drainTimeoutMs = 30_000,
 } = {}) {
     if (typeof purgeUser !== 'function') throw new TypeError('必须提供可重入的账户清理回调。');
@@ -256,7 +270,15 @@ export async function createUserLifecycle({
             if (job.state === 'cancelled') return publicJob(job);
             if (terminal(job)) throw new UserRemovalError(409, '任务已结束，不能撤销。');
             requireBeforeDeadline(job.handle, job);
-            return publicJob(await finish(job, 'cancelled', '管理员已撤销任务。', actorId));
+            // 只有已发出移除通知的任务才需要再发一封取消通知，避免把未告知过的邮箱引入流程。
+            const announcedEmail = timed(job) ? job.email : null;
+            const result = publicJob(await finish(job, 'cancelled', '管理员已撤销任务。', actorId));
+            if (announcedEmail) {
+                Promise.resolve()
+                    .then(() => sendCancellationNotice({ email: announcedEmail }))
+                    .catch(error => console.error('发送移除取消通知失败:', error));
+            }
+            return result;
         });
     }
 
@@ -416,13 +438,19 @@ export async function createUserLifecycle({
             const job = active.get(handle.toLowerCase());
             return job ? { state: job.state, purgeAt: job.purgeAt } : null;
         },
-        list(page = 1) {
+        list(page = 1, options = {}) {
             const pageSize = 25;
-            const total = jobs.size;
+            const search = String(options.search ?? '').trim().toLowerCase();
+            const state = String(options.state ?? '').trim();
+            const matched = [...jobs.values()]
+                .filter(job => !state || job.state === state)
+                .filter(job => !search || String(job.handle).toLowerCase().includes(search) || String(job.email ?? '').toLowerCase().includes(search))
+                .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+            const total = matched.length;
             const totalPages = Math.max(1, Math.ceil(total / pageSize));
             page = Number.isSafeInteger(page) ? Math.max(1, Math.min(page, totalPages)) : 1;
             const offset = (page - 1) * pageSize;
-            const items = [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)).slice(offset, offset + pageSize).map(publicJob);
+            const items = matched.slice(offset, offset + pageSize).map(job => publicJob(job, options.includeEmail === true));
             return { items, total, page, pageSize, totalPages };
         },
         runOnce: () => Promise.all(dispatch(() => true)),

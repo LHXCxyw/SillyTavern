@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer';
 import storage from 'node-persist';
 
 import { getConfigValue } from './util.js';
+import { formatEmailSubject, renderEmailHtml, renderEmailText } from './email-templates.js';
 
 const SETTINGS_KEY = 'smtp_settings';
 const ENV_FIELDS = {
@@ -14,6 +15,8 @@ const ENV_FIELDS = {
     from: 'SMTP_FROM',
 };
 const FIELDS = Object.keys(ENV_FIELDS);
+const TEST_RECIPIENT_FIELD = 'testRecipient';
+const SAVE_FIELDS = [...FIELDS, TEST_RECIPIENT_FIELD];
 const TEST_INTERVAL_MS = 60_000;
 const CONTROL_CHAR = /[\p{Cc}\u2028\u2029]/u;
 const DOMAIN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
@@ -109,8 +112,25 @@ function endpointAllowed(settings, defaults) {
         Object.hasOwn(endpoint, field) && normalizeSetting(field, endpoint[field]) === settings[field]));
 }
 
-function getTestRecipient() {
-    return normalizeNotificationAddress(process.env.SMTP_TEST_RECIPIENT ?? getConfigValue('smtp.testRecipient', ''));
+async function getTestRecipient() {
+    const { testRecipient, testRecipientValid } = resolveSettings(await readSavedSettings());
+    return testRecipientValid ? testRecipient : null;
+}
+
+function getSmtpPassword() {
+    const pass = process.env.SMTP_PASS || getConfigValue('smtp.pass', '');
+    return typeof pass === 'string' ? pass : '';
+}
+
+function normalizeTestRecipient(value) {
+    if (value == null || value === '') {
+        return '';
+    }
+    if (typeof value !== 'string' || CONTROL_CHAR.test(value)) {
+        return null;
+    }
+    const text = value.trim();
+    return text === '' ? '' : normalizeNotificationAddress(text);
 }
 
 function resolveSettings(saved) {
@@ -127,7 +147,18 @@ function resolveSettings(saved) {
         settings.from = normalizeFrom(settings.user);
     }
     const allowed = endpointAllowed(settings, defaults);
-    return { settings, locked, allowed };
+    // 测试收件地址可在管理面板保存；环境变量优先且视为锁定。
+    const testEnv = process.env.SMTP_TEST_RECIPIENT;
+    const testRecipientLocked = testEnv !== undefined;
+    const testRecipient = normalizeTestRecipient(testEnv ?? saved?.[TEST_RECIPIENT_FIELD] ?? getConfigValue('smtp.testRecipient', ''));
+    return {
+        settings,
+        locked,
+        allowed,
+        testRecipient,
+        testRecipientLocked,
+        testRecipientValid: testRecipient !== null,
+    };
 }
 
 async function readSavedSettings() {
@@ -138,14 +169,20 @@ async function readSavedSettings() {
     }
 }
 
-function settingsView({ settings, locked, allowed }) {
-    const passwordConfigured = Boolean(process.env.SMTP_PASS);
+function settingsView({ settings, locked, allowed, testRecipient, testRecipientLocked, testRecipientValid }) {
+    const passwordConfigured = Boolean(getSmtpPassword());
     return {
-        settings: { ...settings, host: settings.host ?? '', user: settings.user ?? '', from: settings.from ?? '' },
-        locked,
+        settings: {
+            ...settings,
+            host: settings.host ?? '',
+            user: settings.user ?? '',
+            from: settings.from ?? '',
+            testRecipient: testRecipientValid ? testRecipient : '',
+        },
+        locked: { ...locked, testRecipient: testRecipientLocked },
         configured: Boolean(allowed && settings.user && settings.from && passwordConfigured),
         passwordConfigured,
-        testRecipientConfigured: Boolean(getTestRecipient()),
+        testRecipientConfigured: Boolean(testRecipientValid && testRecipient),
     };
 }
 
@@ -155,12 +192,15 @@ export async function getSmtpSettings() {
 
 export async function saveSmtpSettings(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input) ||
-        Object.keys(input).some(field => !FIELDS.includes(field))) {
+        Object.keys(input).some(field => !SAVE_FIELDS.includes(field))) {
         throw smtpError('SMTP_INVALID_SETTINGS');
     }
     const previous = await readSavedSettings();
     const current = resolveSettings(previous);
     const saved = {};
+    if (Object.hasOwn(previous, TEST_RECIPIENT_FIELD)) {
+        saved[TEST_RECIPIENT_FIELD] = previous[TEST_RECIPIENT_FIELD];
+    }
     for (const field of FIELDS) {
         if (Object.hasOwn(previous, field)) {
             saved[field] = previous[field];
@@ -178,6 +218,19 @@ export async function saveSmtpSettings(input) {
             }
         } else {
             saved[field] = value;
+        }
+    }
+    if (Object.hasOwn(input, TEST_RECIPIENT_FIELD)) {
+        const value = normalizeTestRecipient(input[TEST_RECIPIENT_FIELD]);
+        if (value === null) {
+            throw smtpError('SMTP_INVALID_SETTINGS');
+        }
+        if (current.testRecipientLocked) {
+            if (value !== current.testRecipient) {
+                throw smtpError('SMTP_SETTING_LOCKED');
+            }
+        } else {
+            saved[TEST_RECIPIENT_FIELD] = value;
         }
     }
     const updated = resolveSettings(saved);
@@ -206,7 +259,7 @@ function classifyDeliveryError(error) {
 
 async function getDeliverySettings() {
     const { settings, allowed } = resolveSettings(await readSavedSettings());
-    const pass = process.env.SMTP_PASS;
+    const pass = getSmtpPassword();
     if (!allowed || !settings.user || !settings.from || !pass) {
         throw smtpError('SMTP_NOT_CONFIGURED');
     }
@@ -255,35 +308,43 @@ export async function sendSmtpEmail({ email, subject, text, html }) {
     if (typeof subject !== 'string' || CONTROL_CHAR.test(subject)) {
         throw smtpError('SMTP_INVALID_MESSAGE');
     }
-    return deliver(await getDeliverySettings(), to, { subject, text, html });
-}
-
-function getPublicUrl() {
-    const raw = getConfigValue('userLifecycle.publicUrl', '');
-    if (typeof raw !== 'string' || CONTROL_CHAR.test(raw) || !/^https?:\/\//i.test(raw.trim())) {
-        return null;
-    }
-    try {
-        const url = new URL(raw.trim());
-        return url.hostname && !url.username && !url.password && !url.search && !url.hash ? url.href : null;
-    } catch {
-        return null;
-    }
+    return deliver(await getDeliverySettings(), to, { subject: formatEmailSubject(subject), text, html });
 }
 
 export async function sendAccountRemovalNotice({ email }) {
-    const url = getPublicUrl();
+    const intro = '自本通知由邮件服务器（SMTP）接受交接起 7 天后，您的账户将被移除。';
+    const note = '请登录站点，在账户设置中查看确切截止时间，并在截止前选择“下载备份”保存您的数据。';
+    const warning = '保留期不会因登录而延长，截止后账户与备份将不可访问。';
     return sendSmtpEmail({
         email,
         subject: '账户移除通知',
-        text: '自本通知由邮件服务器（SMTP）接受交接起 7 天后，您的账户将被移除。'
-            + '\n请登录站点，在账户设置中查看确切截止时间，并在截止前选择“下载备份”保存您的数据。'
-            + (url ? `\n站点：${url}` : ''),
+        text: renderEmailText({ intro, note, warning }),
+        html: renderEmailHtml({
+            heading: '账户移除通知',
+            intro,
+            note,
+            warning,
+        }),
+    });
+}
+
+export async function sendAccountRemovalCancellationNotice({ email }) {
+    const intro = '管理员已撤销该账户的移除任务，账号将保持不变。';
+    const note = '您可以继续正常登录并使用账户；如对本次操作有疑问，可通过交流群联系管理员。';
+    return sendSmtpEmail({
+        email,
+        subject: '账户移除已取消',
+        text: renderEmailText({ intro, note }),
+        html: renderEmailHtml({
+            heading: '账户移除已取消',
+            intro,
+            note,
+        }),
     });
 }
 
 export async function sendSmtpTestEmail() {
-    const to = getTestRecipient();
+    const to = await getTestRecipient();
     if (!to) {
         throw smtpError('SMTP_TEST_RECIPIENT_NOT_CONFIGURED');
     }
@@ -293,5 +354,16 @@ export async function sendSmtpTestEmail() {
         throw smtpError('SMTP_TEST_RATE_LIMITED', true);
     }
     nextTestAt = now + TEST_INTERVAL_MS;
-    await deliver(settings, to, { subject: 'SMTP 配置测试', text: '这是一封站点管理员发起的 SMTP 测试邮件。' });
+    await deliver(settings, to, {
+        subject: formatEmailSubject('SMTP 配置测试'),
+        text: renderEmailText({
+            intro: '这是一封站点管理员发起的 SMTP 测试邮件。',
+            note: '收到此邮件说明当前 SMTP 参数、授权码与 TLS 连接可用。',
+        }),
+        html: renderEmailHtml({
+            heading: 'SMTP 配置测试',
+            intro: '这是一封站点管理员发起的 SMTP 测试邮件。',
+            note: '收到此邮件说明当前 SMTP 参数、授权码与 TLS 连接可用。',
+        }),
+    });
 }

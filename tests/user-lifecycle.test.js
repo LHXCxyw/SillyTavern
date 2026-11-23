@@ -10,11 +10,11 @@ const { acquireUserOperation, getUserPurgeDeadline, isUserPurgeBlocked, setUserP
 const retention = 168 * 3_600_000;
 const actor = { handle: 'operator', accountId: 'operator-id' };
 const email = 'alice@example.test';
-let root, users, time, paused, sendNotice, purgeUser, service;
+let root, users, time, paused, sendNotice, sendCancellationNotice, purgeUser, service;
 
 function init() {
     return createUserLifecycle({
-        dataRoot: root, now: () => time, paused: () => paused, sendNotice, purgeUser,
+        dataRoot: root, now: () => time, paused: () => paused, sendNotice, sendCancellationNotice, purgeUser,
         readUser: async handle => users.get(handle),
         writeUser: async user => users.set(user.handle, user),
         drainTimeoutMs: 5,
@@ -47,6 +47,7 @@ beforeEach(async () => {
         ['admin', { handle: 'admin', accountId: 'admin-id', admin: true }],
     ]);
     sendNotice = jest.fn(async () => ({ acceptedAt: time }));
+    sendCancellationNotice = jest.fn(async () => ({ acceptedAt: time }));
     purgeUser = jest.fn(async job => { users.delete(job.handle); });
     service = await init();
 });
@@ -105,6 +106,28 @@ test('SMTP 明确接受后保留完整 168 小时；到期中止操作并等待�
     expect(purgeUser).toHaveBeenCalledWith({ id: jobId, handle: 'alice', accountId: 'alice-id' });
     expect(service.getRemoval('alice')).toBeNull();
     expect(await saved(jobId)).toMatchObject({ state: 'cleared', email: null });
+});
+
+test('撤销已发出通知的移除任务后发送取消通知', async () => {
+    const { jobId } = await schedule();
+    await service.runOnce();
+    expect(sendNotice).toHaveBeenCalledTimes(1);
+    expect(sendCancellationNotice).not.toHaveBeenCalled();
+
+    const result = await service.cancel(jobId, actor.accountId);
+    expect(result.state).toBe('cancelled');
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(sendCancellationNotice).toHaveBeenCalledWith({ email });
+    expect(await saved(jobId)).toMatchObject({ state: 'cancelled', email: null });
+});
+
+test('撤销尚未发出通知的任务不发送取消通知', async () => {
+    const { jobId } = await schedule();
+    await service.cancel(jobId, actor.accountId);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(sendCancellationNotice).not.toHaveBeenCalled();
 });
 
 test('邮箱更新先撤销；迟到的 SMTP 成功不会恢复任务', async () => {

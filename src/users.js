@@ -23,6 +23,7 @@ import { getContentOfType } from './endpoints/content-manager.js';
 import { serverDirectory } from './server-directory.js';
 import { filterValidIpPatterns, getIpFromRequest } from './express-common.js';
 import { extensionsEnabledFeatureGuard } from './endpoints/extensions.js';
+import { initAccountStore, recordAccount } from './account-store.js';
 
 export const KEY_PREFIX = 'user:';
 const AVATAR_PREFIX = 'avatar:';
@@ -562,6 +563,16 @@ export function toAvatarKey(handle) {
 }
 
 /**
+ * 写入账户：先写 KV（权威存储），再更新内存索引与可选 SQLite 影子。
+ * @param {import('./users.js').User} user 账户对象
+ * @returns {Promise<void>}
+ */
+export async function saveUserRecord(user) {
+    await storage.setItem(toKey(user.handle), user);
+    recordAccount(user);
+}
+
+/**
  * Initializes the user storage.
  * @param {string} dataRoot The root directory for user data
  * @returns {Promise<void>}
@@ -584,6 +595,8 @@ export async function initUserStorage(dataRoot) {
         const user = await storage.getItem(toKey(handle));
         if (user && !user.accountId) await storage.setItem(toKey(handle), { ...user, accountId: crypto.randomUUID() });
     }
+
+    await initAccountStore({ dataRoot });
 }
 
 /**
@@ -980,7 +993,7 @@ export function establishUserSession(request, authenticatedUser, { explicit = fa
         const lastLogin = Math.max(Date.now(), Number.isFinite(user.lastLogin) ? user.lastLogin : 0);
         user.lastLogin = lastLogin;
         if (explicit) user.lastActivity = lastLogin;
-        await storage.setItem(toKey(handle), user);
+        await saveUserRecord(user);
         if (isUserPurgeBlocked(handle)) return false;
         request.session.handle = handle;
         request.session.version = getAccountVersion(user);

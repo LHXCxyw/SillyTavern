@@ -59,3 +59,6 @@ public/scripts/extensions/third-party
 yarn.lock
 *.code-workspace
 test-results/
+# 本地抓包与补丁压缩包不进入版本库
+/download
+/sillytavern-1.19.1-*.tar.gz

@@ -722,10 +722,8 @@ export async function getBackgrounds() {
             }
         }
 
-        // Load folders first so getFilteredImages() works correctly in folder view
-        await loadFolders();
-
-        await preloadImageMetadata();
+        // 文件夹列表与图片元数据互不依赖，并行取回以少等一个往返。
+        await Promise.all([loadFolders(), preloadImageMetadata()]);
 
         // Render only filtered images if inside a folder, otherwise all
         renderSystemBackgrounds(getFilteredImages());

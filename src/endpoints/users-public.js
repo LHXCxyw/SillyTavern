@@ -5,7 +5,8 @@ import express from 'express';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { getIpAddress, retryAfter } from '../express-common.js';
 import { color, Cache, getConfigValue } from '../util.js';
-import { KEY_PREFIX, getUserAvatar, toKey, getPasswordHash, getPasswordSalt, getAccountVersion, canCreateUserAccount, ensureUserDirectories, establishUserSession } from '../users.js';
+import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, getAccountVersion, canCreateUserAccount, ensureUserDirectories, establishUserSession, saveUserRecord } from '../users.js';
+import { getAllAccounts } from '../account-store.js';
 import { acquireUserOperation, isUserPurgeBlocked, withUserLock } from '../user-operation-state.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { generateEmailCode, isQQEmail, removeEmailCode, saveEmailCode, sendPasswordResetEmail, sendVerificationEmail, verifyEmailCode } from '../emailVerification.js';
@@ -46,7 +47,7 @@ router.post('/list', async (_request, response) => {
         }
 
         /** @type {import('../users.js').User[]} */
-        const users = await storage.values(x => x.key.startsWith(KEY_PREFIX));
+        const users = getAllAccounts();
 
         /** @type {Promise<import('../users.js').UserViewModel>[]} */
         const viewModelPromises = users
@@ -242,8 +243,8 @@ router.post('/register', async (request, response) => {
                 lastLogin: null,
                 lastActivity: null,
             };
-            await storage.setItem(toKey(handle), user);
-            await checkForNewContent([ensureUserDirectories(handle)], [CONTENT_TYPES.SETTINGS]);
+            await checkForNewContent([ensureUserDirectories(handle)], [CONTENT_TYPES.SETTINGS], { strict: true });
+            await saveUserRecord(user);
             await markCardKeyAsUsed(cardKey, handle);
             await removeEmailCode(email);
             await registerLimiter.delete(`${ip}:${email}`);
@@ -282,7 +283,7 @@ router.post('/recover-step2', async (request, response) => {
             const previousVersion = getAccountVersion(user);
             user.salt = newPassword ? getPasswordSalt() : '';
             user.password = newPassword ? getPasswordHash(newPassword, user.salt) : '';
-            await storage.setItem(toKey(handle), user);
+            await saveUserRecord(user);
             MFA_CACHE.remove(user.accountId);
             if (request.session?.handle === handle && request.session.version === previousVersion) {
                 request.session.version = getAccountVersion(user);

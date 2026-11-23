@@ -103,6 +103,30 @@ body.login .auth-actions .menu_button {
     writing-mode: horizontal-tb;
 }
 
+body.login .login-support {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 6px 10px;
+    margin-top: 14px;
+    font-size: 0.9rem;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.8;
+    text-align: center;
+}
+
+body.login .login-support-number {
+    font-family: var(--monoFontFamily);
+    letter-spacing: 0.5px;
+    user-select: all;
+}
+
+body.login .login-support-note {
+    font-size: 0.85rem;
+    opacity: 0.85;
+}
+
 @media screen and (max-width: 600px) {
     body.login #dialogue_popup_text {
         padding: 22px 14px;

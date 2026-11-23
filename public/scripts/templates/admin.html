@@ -89,7 +89,20 @@
         </form>
     </section>
     <section class="navTab removalJobs" aria-label="清除任务" hidden>
-        <div class="accountsBar accountsBulk"><span>保留期结束后，数据可能被永久清除。</span><button type="button" class="menu_button jobsRefresh">刷新</button></div>
+        <div class="accountsBar accountsBulk jobsFilters">
+            <input type="search" class="text_pole jobsSearch" placeholder="搜索用户名或邮箱" aria-label="搜索清除任务">
+            <select class="text_pole jobsStateFilter" aria-label="按状态筛选清除任务">
+                <option value="">全部状态</option>
+                <option value="queued">排队中</option>
+                <option value="blocked">等待处理</option>
+                <option value="grace">保留期</option>
+                <option value="purging">正在清除</option>
+                <option value="cleared">已清除</option>
+                <option value="cancelled">已取消</option>
+            </select>
+            <button type="button" class="menu_button jobsRefresh">刷新</button>
+        </div>
+        <p class="accountsBar">保留期结束后，数据可能被永久清除。</p>
         <div class="accountsScroll jobsList" role="list" aria-label="清除任务结果"></div>
         <footer class="accountsBar accountsFooter">
             <span class="jobsSummary" role="status"></span>
@@ -99,7 +112,7 @@
     <section class="navTab mailSettings" aria-label="邮件设置" hidden>
         <form class="accountsScroll mailSettingsForm">
             <h3>通知邮件 · SMTP</h3>
-            <p>密码与测试收件地址由部署端配置；本页面不读取或修改密码。</p>
+            <p>密码由部署端配置；测试收件地址可在此设置，留空则禁用测试发送。</p>
             <p class="mailStatus" role="status"></p>
             <fieldset disabled>
                 <legend>连接参数</legend>
@@ -108,6 +121,7 @@
                     <label>端口<input class="text_pole" name="port" type="number" min="1" max="65535"></label>
                     <label>SMTP 用户名<input class="text_pole" name="user" type="text" autocomplete="off"></label>
                     <label>发件人<input class="text_pole" name="from" type="text"></label>
+                    <label>测试收件地址<input class="text_pole" name="testRecipient" type="email" placeholder="留空则不发送测试邮件" autocomplete="off"></label>
                     <label class="secureMail"><input name="secure" type="checkbox">使用隐式 TLS</label>
                 </div>
             </fieldset>

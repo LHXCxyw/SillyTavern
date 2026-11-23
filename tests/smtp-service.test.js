@@ -11,7 +11,7 @@ jest.unstable_mockModule('node-persist', () => ({ default: storage }));
 jest.unstable_mockModule('../src/util.js', () => ({ getConfigValue }));
 jest.unstable_mockModule('../src/users.js', () => ({ requireAdminMiddleware }));
 
-const { getSmtpSettings, saveSmtpSettings, sendAccountRemovalNotice, normalizeNotificationAddress } = await import('../src/smtp-service.js');
+const { getSmtpSettings, saveSmtpSettings, sendAccountRemovalNotice, sendAccountRemovalCancellationNotice, normalizeNotificationAddress } = await import('../src/smtp-service.js');
 const { sendVerificationEmail, sendPasswordResetEmail } = await import('../src/emailVerification.js');
 const { router } = await import('../src/endpoints/admin-mail.js');
 const address = 'user@example.test';
@@ -21,14 +21,13 @@ let config;
 beforeEach(() => {
     jest.resetAllMocks();
     process.env = { ...environment };
-    for (const key of ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_FROM', 'SMTP_TEST_RECIPIENT']) {
+    for (const key of ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_FROM', 'SMTP_PASS', 'SMTP_TEST_RECIPIENT']) {
         delete process.env[key];
     }
-    process.env.SMTP_PASS = 'mock-secret';
     config = {
         'smtp.host': 'smtp.example.test',
         'smtp.user': 'sender@example.test',
-        'smtp.pass': 'ignored-yaml-secret',
+        'smtp.pass': 'mock-secret',
         'smtp.testRecipient': 'yaml@example.test',
         'userLifecycle.publicUrl': 'https://example.test/site/',
     };
@@ -48,17 +47,49 @@ test('只规范化单一地址并保留本地部分大小写', () => {
     }
 });
 
-test('读取历史默认值，不返回或依赖 YAML 密码，仍可保存非密字段', async () => {
-    delete process.env.SMTP_PASS;
+test('YAML 授权码可用，但不由管理员接口返回或保存', async () => {
     expect(await getSmtpSettings()).toEqual({
-        settings: { host: 'smtp.example.test', port: 465, secure: true, user: 'sender@example.test', from: 'sender@example.test' },
-        locked: { host: false, port: false, secure: false, user: false, from: false },
-        configured: false,
-        passwordConfigured: false,
+        settings: { host: 'smtp.example.test', port: 465, secure: true, user: 'sender@example.test', from: 'sender@example.test', testRecipient: 'yaml@example.test' },
+        locked: { host: false, port: false, secure: false, user: false, from: false, testRecipient: false },
+        configured: true,
+        passwordConfigured: true,
         testRecipientConfigured: true,
     });
     await saveSmtpSettings({ user: 'another@example.test', from: '通知 <another@example.test>' });
     expect(storage.setItem).toHaveBeenCalledWith('smtp_settings', { user: 'another@example.test', from: '通知 <another@example.test>' });
+});
+
+test('测试收件地址可在管理面板保存，环境变量存在时锁定', async () => {
+    const saved = await saveSmtpSettings({ testRecipient: ' Box@Example.TEST ' });
+    expect(storage.setItem).toHaveBeenCalledWith('smtp_settings', { testRecipient: 'Box@example.test' });
+    expect(saved).toMatchObject({
+        settings: { testRecipient: 'Box@example.test' },
+        locked: { testRecipient: false },
+        testRecipientConfigured: true,
+    });
+    await expect(saveSmtpSettings({ testRecipient: 'not-an-address' })).rejects.toMatchObject({ code: 'SMTP_INVALID_SETTINGS' });
+
+    process.env.SMTP_TEST_RECIPIENT = 'env@example.test';
+    expect(await getSmtpSettings()).toMatchObject({
+        settings: { testRecipient: 'env@example.test' },
+        locked: { testRecipient: true },
+    });
+    await expect(saveSmtpSettings({ testRecipient: 'other@example.test' })).rejects.toMatchObject({ code: 'SMTP_SETTING_LOCKED' });
+});
+
+test('非空 SMTP_PASS 优先，空环境变量回退到 YAML 授权码', async () => {
+    process.env.SMTP_PASS = 'env-secret';
+    await sendAccountRemovalNotice({ email: address });
+    expect(createTransport).toHaveBeenLastCalledWith(expect.objectContaining({ auth: { user: 'sender@example.test', pass: 'env-secret' } }));
+
+    process.env.SMTP_PASS = '';
+    await sendAccountRemovalNotice({ email: address });
+    expect(createTransport).toHaveBeenLastCalledWith(expect.objectContaining({ auth: { user: 'sender@example.test', pass: 'mock-secret' } }));
+});
+
+test.each(['', 123456])('没有有效的字符串授权码时不连接 SMTP（%p）', async (pass) => {
+    config['smtp.pass'] = pass;
+    expect(await getSmtpSettings()).toMatchObject({ configured: false, passwordConfigured: false });
     await expect(sendAccountRemovalNotice({ email: address })).rejects.toMatchObject({ code: 'SMTP_NOT_CONFIGURED', uncertain: false, retryable: false });
     expect(createTransport).not.toHaveBeenCalled();
 });
@@ -94,6 +125,13 @@ test('验证码与移除通知共用 SMTP，通知仅包含通用指引及部署
     }));
     expect(sendMail).toHaveBeenNthCalledWith(1, expect.objectContaining({ to: '12345@qq.com', text: expect.stringContaining('123456') }));
     expect(sendMail).toHaveBeenNthCalledWith(2, expect.objectContaining({ to: '12345@qq.com', text: expect.stringContaining('654321') }));
+    expect(sendMail.mock.calls[0][0].subject).toBe('【咸鱼傻酒馆】验证码');
+    expect(sendMail.mock.calls[1][0].subject).toBe('【咸鱼傻酒馆】密码重置验证码');
+    expect(sendMail.mock.calls[2][0].subject).toBe('【咸鱼傻酒馆】账户移除通知');
+    expect(sendMail.mock.calls[0][0].text).toContain('进入咸鱼傻酒馆：https://example.test/site/');
+    expect(sendMail.mock.calls[0][0].text).toContain('交流群：745442628');
+    expect(sendMail.mock.calls[0][0].html).toContain('href="https://example.test/site/"');
+    expect(sendMail.mock.calls[0][0].html).toContain('交流群：');
     const text = sendMail.mock.calls[2][0].text;
     expect(text).toMatch(/SMTP.*7 天/);
     expect(text).toContain('确切截止时间');
@@ -104,6 +142,16 @@ test('验证码与移除通知共用 SMTP，通知仅包含通用指引及部署
     config['userLifecycle.publicUrl'] = 'https://user:secret@example.test/';
     await sendAccountRemovalNotice({ email: address });
     expect(sendMail.mock.calls[3][0].text).not.toContain('https://');
+});
+
+test('取消移除通知复用统一模板、站点标题和联系方式', async () => {
+    await sendAccountRemovalCancellationNotice({ email: address });
+    const mail = sendMail.mock.calls[0][0];
+    expect(mail.subject).toBe('【咸鱼傻酒馆】账户移除已取消');
+    expect(mail.text).toContain('账号将保持不变');
+    expect(mail.text).toContain('进入咸鱼傻酒馆：https://example.test/site/');
+    expect(mail.text).toContain('交流群：745442628');
+    expect(mail.html).toContain('href="https://example.test/site/"');
 });
 
 test('需要目标明确获接收且无拒收；超时和断连保持不确定', async () => {

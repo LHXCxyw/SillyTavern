@@ -747,9 +747,12 @@ function bindRemovalJobs(template, refreshUsers) {
     const prev = template.find('.jobsPrev');
     const next = template.find('.jobsNext');
     const pageInfo = template.find('.jobsPageInfo');
+    const searchInput = template.find('.jobsSearch');
+    const stateInput = template.find('.jobsStateFilter');
     let page = 1;
     let request;
     let closed = false;
+    let searchTimer;
 
     async function refresh(target = page) {
         if (closed) return;
@@ -761,15 +764,21 @@ function bindRemovalJobs(template, refreshUsers) {
         pageInfo.empty();
         summary.text('正在读取清除任务…');
         try {
-            const data = await accountRequest(`${removalJobsPath}?page=${target}`, 'GET', undefined, controller.signal);
+            const params = new URLSearchParams({ page: String(target) });
+            const search = String(searchInput.val() ?? '').trim();
+            const state = String(stateInput.val() ?? '');
+            if (search) params.set('search', search);
+            if (state) params.set('state', state);
+            const data = await accountRequest(`${removalJobsPath}?${params}`, 'GET', undefined, controller.signal);
             if (controller.signal.aborted) return;
             const totalPages = Math.max(1, data.totalPages);
             if (target > totalPages && !data.items.length) return refresh(totalPages);
             page = data.page;
             for (const job of data.items) {
+                const title = job.name ? `${job.handle}（${job.name}）` : job.handle;
                 const row = $('<article class="accountJob" role="listitem">').append(
-                    $('<div class="accountsBar">').append($('<strong>').text(job.handle), $('<small>').text(removalStates.get(job.state) ?? job.state)),
-                    $('<div class="accountFacts">').text(`创建：${accountDate(job.createdAt)} · 通知受理：${accountDate(job.acceptedAt)} · 清除时间：${accountDate(job.purgeAt)}`),
+                    $('<div class="accountsBar">').append($('<strong>').text(title), $('<small>').text(removalStates.get(job.state) ?? job.state)),
+                    $('<div class="accountFacts">').text(`邮箱：${job.email || '未提供'} · 创建：${accountDate(job.createdAt)} · 通知受理：${accountDate(job.acceptedAt)} · 清除时间：${accountDate(job.purgeAt)}`),
                 );
                 if (job.reason) row.append($('<div>').text(job.reason));
                 const actions = $('<div class="accountsBar">').appendTo(row);
@@ -806,6 +815,11 @@ function bindRemovalJobs(template, refreshUsers) {
         }
     }
     template.find('.jobsRefresh').on('click', () => refresh());
+    searchInput.on('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => { page = 1; refresh(1); }, 280);
+    });
+    stateInput.on('change', () => { page = 1; refresh(1); });
     prev.on('click', () => refresh(page - 1));
     next.on('click', () => refresh(page + 1));
     return { refresh, close() { closed = true; request?.abort(); } };
@@ -818,8 +832,8 @@ function bindMailSettings(template) {
     const test = form.find('.mailTest');
     const reload = form.find('.mailRefresh');
     const fieldset = form.find('fieldset');
-    const fields = ['host', 'port', 'secure', 'user', 'from'];
-    const labels = ['SMTP 主机', '端口', '隐式 TLS', 'SMTP 用户名', '发件人'];
+    const fields = ['host', 'port', 'secure', 'user', 'from', 'testRecipient'];
+    const labels = ['SMTP 主机', '端口', '隐式 TLS', 'SMTP 用户名', '发件人', '测试收件地址'];
     let data;
     let busy = false;
     let dirty = false;
@@ -998,6 +1012,39 @@ function accountDate(value) {
     return Number.isFinite(value) ? new Date(value).toLocaleString() : '无记录';
 }
 
+const AVATAR_PLACEHOLDER = 'img/ai4.png';
+const avatarObserver = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver(entries => {
+        for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            avatarObserver.unobserve(entry.target);
+            const handle = entry.target.dataset.avatarHandle;
+            if (handle) entry.target.src = `/api/users/avatar/${encodeURIComponent(handle)}`;
+        }
+    }, { rootMargin: '80px' })
+    : null;
+
+/**
+ * 先显示占位图，头像进入可见区域后再单独请求，避免列表响应携带 base64。
+ * @param {JQuery} row 账户行
+ * @param {string} handle 用户名
+ */
+function bindLazyAvatar(row, handle) {
+    const img = row.find('.avatar img')[0];
+    if (!img) return;
+    img.src = AVATAR_PLACEHOLDER;
+    img.onerror = () => {
+        img.onerror = null;
+        img.src = AVATAR_PLACEHOLDER;
+    };
+    if (!avatarObserver) {
+        img.src = `/api/users/avatar/${encodeURIComponent(handle)}`;
+        return;
+    }
+    img.dataset.avatarHandle = handle;
+    avatarObserver.observe(img);
+}
+
 async function accountRequest(path, method = 'GET', body = undefined, signal = undefined) {
     const response = await fetch(`/api/users${path}`, {
         method,
@@ -1087,7 +1134,11 @@ async function openAdminPanel() {
         const row = template.find('.userAccountTemplate .userAccount').clone();
         const { handle, removal } = user;
         const refresh = () => renderUsers(page);
-        row.find('.userName').text(user.name);
+        const nameCell = row.find('.userName').text(user.name);
+        if (removal) {
+            const suffix = removal.state === 'purging' ? '（清除中）' : removal.state === 'grace' ? '（待移除）' : '（待处理）';
+            nameCell.append($('<span class="userNameRemoval">').text(suffix));
+        }
         row.find('.userHandle').text(handle);
         row.find('.userStatus').text(user.enabled ? '已启用' : '已禁用');
         row.find('.userRole').text(user.admin ? '管理员' : '普通用户');
@@ -1096,7 +1147,8 @@ async function openAdminPanel() {
         row.find('.userLastLogin').text(accountDate(user.lastLogin));
         row.find('.userCreated').text(accountDate(user.created));
         row.find('.userRemoval').text(removal ? `${removalStates.get(removal.state) ?? removal.state}${removal.purgeAt ? ` · 截止 ${accountDate(removal.purgeAt)}` : ''}` : user.deletionProtected ? '禁止清除' : '');
-        row.find('.avatar img').attr('src', user.avatar || 'img/ai4.png');
+        row.find('.avatar img').attr('src', AVATAR_PLACEHOLDER);
+        bindLazyAvatar(row, handle);
         row.find('summary').attr('aria-label', `${handle} 的账户操作`);
         row.find('.accountSelect').val(handle).attr('aria-label', `选择用户 ${handle}`).on('change', function () { selectHandles([handle], this.checked); });
         row.find('.userDelete').on('click', () => startPreview([handle]));
@@ -1166,7 +1218,7 @@ async function openAdminPanel() {
             return;
         }
         try {
-            const data = await accountRequest('/get', 'POST', { ...query, page: targetPage, pageSize: 25, includeAvatars: true }, controller.signal);
+            const data = await accountRequest('/get', 'POST', { ...query, page: targetPage, pageSize: 25, includeAvatars: false }, controller.signal);
             if (controller.signal.aborted || closed) return;
             if (targetPage > Math.max(1, data.totalPages) && !data.items.length) {
                 renderUsers(Math.max(1, data.totalPages));

@@ -13,6 +13,7 @@ import { write } from '../character-card-parser.js';
 import { serverDirectory } from '../server-directory.js';
 import { Jimp, JimpMime } from '../jimp.js';
 import { DEFAULT_AVATAR_PATH } from '../constants.js';
+import { SeedStorageError, assertSeedSpace, copySeedFile, measureTreeBytes, supportsSeedClone } from '../seed-storage.js';
 
 const contentDirectory = path.join(serverDirectory, 'default/content');
 const scaffoldDirectory = path.join(serverDirectory, 'default/scaffold');
@@ -170,7 +171,12 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
         }
 
         fs.mkdirSync(contentTarget, { recursive: true });
-        copyContentRecursive(contentPath, targetPath);
+        // 目标卷不支持 CoW 时先做空间预检，避免开户中途写满磁盘。
+        const clone = supportsSeedClone(contentTarget);
+        if (!clone) {
+            assertSeedSpace(contentTarget, measureTreeBytes(contentPath));
+        }
+        copyContentRecursive(contentPath, targetPath, clone);
         setPermissionsSync(targetPath);
         console.info(`Content file ${contentItem.filename} copied to ${contentTarget}`);
         anyContentAdded = true;
@@ -182,10 +188,12 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
 
 /**
  * 递归复制文件或目录。替代 fs.cpSync，避免 Node.js v24 上递归复制目录时的崩溃问题。
+ * 文件优先使用写时复制克隆，不支持时回退普通复制。
  * @param {string} src 源路径
  * @param {string} dest 目标路径
+ * @param {boolean} clone 是否尝试 CoW 克隆
  */
-function copyContentRecursive(src, dest) {
+function copyContentRecursive(src, dest, clone) {
     const stat = fs.statSync(src);
     if (stat.isDirectory()) {
         fs.mkdirSync(dest, { recursive: true });
@@ -194,13 +202,13 @@ function copyContentRecursive(src, dest) {
             const srcPath = path.join(src, entry.name);
             const destPath = path.join(dest, entry.name);
             if (entry.isDirectory()) {
-                copyContentRecursive(srcPath, destPath);
+                copyContentRecursive(srcPath, destPath, clone);
             } else {
-                fs.copyFileSync(srcPath, destPath);
+                copySeedFile(srcPath, destPath, clone);
             }
         }
     } else {
-        fs.copyFileSync(src, dest);
+        copySeedFile(src, dest, clone);
     }
 }
 
@@ -234,9 +242,10 @@ async function seedGlobalContent(contentIndex) {
  * Checks for new content and seeds it for all users.
  * @param {import('../users.js').UserDirectoryList[]} directoriesList List of user directories
  * @param {string[]} forceCategories List of categories to force check (even if content check is skipped)
+ * @param {{ strict?: boolean }} [options] strict 为 true 时向上抛出存储条件错误（用于开户）
  * @returns {Promise<void>}
  */
-export async function checkForNewContent(directoriesList, forceCategories = []) {
+export async function checkForNewContent(directoriesList, forceCategories = [], options = {}) {
     try {
         const contentCheckSkip = getConfigValue('skipContentCheck', false, 'boolean');
         if (contentCheckSkip && forceCategories?.length === 0) {
@@ -266,6 +275,9 @@ export async function checkForNewContent(directoriesList, forceCategories = []) 
             console.info();
         }
     } catch (err) {
+        if (err instanceof SeedStorageError && options.strict) {
+            throw err;
+        }
         console.error('Content check failed', err);
     }
 }

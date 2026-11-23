@@ -838,13 +838,90 @@ export function countTokensOpenAI(messages, full = false) {
 }
 
 /**
+ * 待合并的 OpenAI 逐条计数请求。同一时刻的请求会合并为一次批量调用，
+ * 保持每条消息独立计数，仅减少网络往返。
+ */
+const pendingOpenAICountRequests = [];
+let openAICountFlushQueued = false;
+
+/**
+ * 把一条计数请求加入队列，等待合并发送。
+ * @param {object} message 单条消息
+ * @param {string} endpoint 原逐条接口地址（含 model 查询参数）
+ * @returns {Promise<number>} token 数
+ */
+function enqueueOpenAICount(message, endpoint) {
+    return new Promise((resolve, reject) => {
+        pendingOpenAICountRequests.push({ message, endpoint, resolve, reject });
+        if (!openAICountFlushQueued) {
+            openAICountFlushQueued = true;
+            queueMicrotask(flushOpenAICountRequests);
+        }
+    });
+}
+
+/**
+ * 合并发送队列中的计数请求；批量接口不可用时回退为逐条请求。
+ * @returns {Promise<void>}
+ */
+async function flushOpenAICountRequests() {
+    openAICountFlushQueued = false;
+    const batch = pendingOpenAICountRequests.splice(0, pendingOpenAICountRequests.length);
+    if (batch.length === 0) {
+        return;
+    }
+
+    /** @type {Map<string, typeof batch>} */
+    const groups = new Map();
+    for (const item of batch) {
+        const items = groups.get(item.endpoint) ?? [];
+        items.push(item);
+        groups.set(item.endpoint, items);
+    }
+
+    for (const [endpoint, items] of groups) {
+        const model = new URLSearchParams(endpoint.split('?')[1] ?? '').get('model') ?? '';
+        try {
+            const data = await jQuery.ajax({
+                async: true,
+                type: 'POST',
+                url: `/api/tokenizers/openai/count-batch?model=${encodeURIComponent(model)}`,
+                data: JSON.stringify({ messages: items.map(item => item.message) }),
+                dataType: 'json',
+                contentType: 'application/json',
+            });
+            const counts = data?.token_counts;
+            if (!Array.isArray(counts) || counts.length !== items.length) {
+                throw new Error('批量计数返回结果不完整');
+            }
+            items.forEach((item, index) => item.resolve(Number(counts[index])));
+        } catch {
+            for (const item of items) {
+                try {
+                    const data = await jQuery.ajax({
+                        async: true,
+                        type: 'POST',
+                        url: item.endpoint,
+                        data: JSON.stringify([item.message]),
+                        dataType: 'json',
+                        contentType: 'application/json',
+                    });
+                    item.resolve(Number(data.token_count));
+                } catch (error) {
+                    item.reject(error);
+                }
+            }
+        }
+    }
+}
+
+/**
  * Returns the token count for a message using the OpenAI tokenizer.
  * @param {object[]|object} messages
  * @param {boolean} full
  * @returns {Promise<number>} Token count.
  */
 export async function countTokensOpenAIAsync(messages, full = false) {
-    const tokenizerEndpoint = `/api/tokenizers/openai/count?model=${getTokenizerModel()}`;
     const cacheObject = getTokenCacheObject();
 
     if (!Array.isArray(messages)) {
@@ -852,9 +929,13 @@ export async function countTokensOpenAIAsync(messages, full = false) {
     }
 
     let token_count = 0;
+    /** @type {{message: object, cacheKey: string, endpoint: string}[]} */
+    const misses = [];
 
     for (const message of messages) {
-        const model = getTokenizerModel();
+        // 空模型（例如自定义源未填模型名）与服务端一样回退到 gpt-3.5-turbo，
+        // 避免请求 URL 出现 model= 并在排查时误导。
+        const model = getTokenizerModel() || 'gpt-3.5-turbo';
 
         if (model === 'claude') {
             full = true;
@@ -867,18 +948,16 @@ export async function countTokensOpenAIAsync(messages, full = false) {
         if (typeof cachedCount === 'number') {
             token_count += cachedCount;
         } else {
-            const data = await jQuery.ajax({
-                async: true,
-                type: 'POST', //
-                url: tokenizerEndpoint,
-                data: JSON.stringify([message]),
-                dataType: 'json',
-                contentType: 'application/json',
-            });
-
-            token_count += Number(data.token_count);
-            cacheObject[cacheKey] = Number(data.token_count);
+            misses.push({ message, cacheKey, endpoint: `/api/tokenizers/openai/count?model=${model}` });
         }
+    }
+
+    if (misses.length > 0) {
+        const counts = await Promise.all(misses.map(item => enqueueOpenAICount(item.message, item.endpoint)));
+        counts.forEach((count, index) => {
+            cacheObject[misses[index].cacheKey] = count;
+            token_count += count;
+        });
     }
 
     if (!full) token_count -= 2;

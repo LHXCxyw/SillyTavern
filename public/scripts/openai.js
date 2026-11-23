@@ -874,6 +874,30 @@ async function populationInjectionPrompts(prompts, messages) {
     return messages;
 }
 
+/** 历史消息 token 预取上限，防止单批请求过大。 */
+const CHAT_HISTORY_PREFETCH_LIMIT = 128;
+
+/**
+ * 并行预取历史消息的 token 计数以填充缓存。
+ * 只统计 role/content 与逐条构建消息时一致的部分，失败不影响主生成流程。
+ * @param {object[]} chatPool 已反序的历史消息池
+ * @returns {Promise<void>}
+ */
+async function prefetchChatHistoryTokens(chatPool) {
+    const tasks = chatPool.slice(0, CHAT_HISTORY_PREFETCH_LIMIT).map(chatPrompt => {
+        try {
+            const prepared = promptManager.preparePrompt(new Prompt(chatPrompt));
+            if (typeof prepared.content !== 'string' || prepared.content.length === 0) {
+                return Promise.resolve(0);
+            }
+            return countTokensOpenAIAsync({ role: prepared.role, content: prepared.content });
+        } catch {
+            return Promise.resolve(0);
+        }
+    });
+    await Promise.allSettled(tasks);
+}
+
 /**
  * Populates the chat history of the conversation.
  * @param {object[]} messages - Array containing all messages.
@@ -946,6 +970,10 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
 
     // Insert chat messages as long as there is budget available
     const chatPool = [...messages].reverse();
+
+    // 先并行预取计数，后续顺序预算判断会命中缓存，只保留原有截断语义。
+    await prefetchChatHistoryTokens(chatPool);
+
     for (let index = 0; index < chatPool.length; index++) {
         const chatPrompt = chatPool[index];
 
@@ -4321,7 +4349,8 @@ function loadOpenAISettings(data, settings) {
     openai_setting_names = data.openai_setting_names;
     openai_settings = data.openai_settings;
     openai_settings.forEach(function (item, i) {
-        openai_settings[i] = JSON.parse(item);
+        // 未选中的预设不随首屏下发，选中时再通过 /api/presets/get 按需加载。
+        openai_settings[i] = item ? JSON.parse(item) : null;
     });
 
     $('#settings_preset_openai').empty();
@@ -4613,7 +4642,7 @@ async function saveOpenAIPreset(name, settings, triggerUi = true) {
         if (Object.keys(openai_setting_names).includes(data.name)) {
             oai_settings.preset_settings_openai = data.name;
             const value = openai_setting_names[data.name];
-            Object.assign(openai_settings[value], presetBody);
+            openai_settings[value] = Object.assign(openai_settings[value] ?? {}, presetBody);
             $(`#settings_preset_openai option[value="${value}"]`).prop('selected', true);
             if (triggerUi) $('#settings_preset_openai').trigger('change');
         } else {
@@ -4832,7 +4861,7 @@ async function onPresetImportFileChange(e) {
     if (Object.keys(openai_setting_names).includes(data.name)) {
         oai_settings.preset_settings_openai = data.name;
         const value = openai_setting_names[data.name];
-        Object.assign(openai_settings[value], presetBody);
+        openai_settings[value] = Object.assign(openai_settings[value] ?? {}, presetBody);
         $(`#settings_preset_openai option[value="${value}"]`).prop('selected', true);
         $('#settings_preset_openai').trigger('change');
     } else {
@@ -4852,7 +4881,11 @@ async function onExportPresetClick() {
         return;
     }
 
-    const preset = structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
+    const preset = structuredClone(await ensureOpenAIPresetLoaded(oai_settings.preset_settings_openai));
+    if (!preset) {
+        toastr.error(t`Preset could not be loaded`);
+        return;
+    }
 
     const fieldValues = sensitiveFields.filter(field => preset[field]).map(field => `<b>${field}</b>: <code>${preset[field]}</code>`);
     if (fieldValues.length > 0) {
@@ -5017,28 +5050,80 @@ export function getPresetApplicationPromise() {
 }
 
 // Load OpenAI preset settings
+/**
+ * 按需加载 OpenAI 预设内容。首屏只带当前预设，其余在切换时再取。
+ * @param {string} presetName 预设名
+ * @returns {Promise<any>} 预设对象，未找到时为 null
+ */
+async function ensureOpenAIPresetLoaded(presetName) {
+    const index = openai_setting_names?.[presetName];
+    if (index === undefined) {
+        return null;
+    }
+
+    if (openai_settings[index]) {
+        return openai_settings[index];
+    }
+
+    const response = await fetch('/api/presets/get', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ apiId: 'openai', name: presetName }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`Failed to load preset "${presetName}": ${response.status}`);
+    }
+
+    const preset = await response.json();
+    openai_settings[index] = preset;
+    return preset;
+}
+
 function onSettingsPresetChange() {
     const presetNameBefore = oai_settings.preset_settings_openai;
 
     const presetName = $('#settings_preset_openai').find(':selected').text();
     oai_settings.preset_settings_openai = presetName;
 
-    const preset = structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
-
-    migrateChatCompletionSettings(preset);
+    /** @type {any} */
+    let preset = null;
+    let shouldApply = false;
 
     const updateInput = (selector, value) => $(selector).val(value).trigger('input', { source: 'preset' });
     const updateCheckbox = (selector, value) => $(selector).prop('checked', value).trigger('input', { source: 'preset' });
 
-    // Allow subscribers to alter the preset before applying deltas
-    presetApplicationPromise = eventSource.emit(event_types.OAI_PRESET_CHANGED_BEFORE, {
-        preset: preset,
-        presetName: presetName,
-        settingsToUpdate: settingsToUpdate,
-        settings: oai_settings,
-        savePreset: saveOpenAIPreset,
-        presetNameBefore: presetNameBefore,
+    presetApplicationPromise = (async () => {
+        preset = structuredClone(await ensureOpenAIPresetLoaded(presetName));
+        if (!preset) {
+            throw new Error(`Preset "${presetName}" could not be loaded`);
+        }
+
+        // 加载期间又切换了预设，放弃这次应用。
+        if (oai_settings.preset_settings_openai !== presetName) {
+            return;
+        }
+
+        shouldApply = true;
+        migrateChatCompletionSettings(preset);
+
+        // Allow subscribers to alter the preset before applying deltas
+        await eventSource.emit(event_types.OAI_PRESET_CHANGED_BEFORE, {
+            preset: preset,
+            presetName: presetName,
+            settingsToUpdate: settingsToUpdate,
+            settings: oai_settings,
+            savePreset: saveOpenAIPreset,
+            presetNameBefore: presetNameBefore,
+        });
+    })().catch(error => {
+        console.error('Failed to apply OpenAI preset:', error);
+        toastr.error(t`Failed to apply preset`);
     }).finally(async () => {
+        if (!shouldApply) {
+            return;
+        }
+
         if (oai_settings.bind_preset_to_connection) {
             $('.model_custom_select').empty();
         }

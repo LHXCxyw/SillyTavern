@@ -913,118 +913,115 @@ router.post('/openai/decode', async function (req, res) {
     }
 });
 
+/**
+ * 统计 OpenAI 风格消息数组的 token 数。
+ * 逐条分项规则（角色、name、模型差异）与原有接口完全一致。
+ * @param {object[]} messages 消息数组
+ * @param {string} queryModel 原始模型名
+ * @returns {Promise<number>} token 总数
+ */
+async function countOpenAITokens(messages, queryModel) {
+    let num_tokens = 0;
+    const model = getTokenizerModel(queryModel);
+
+    if (model === 'claude') {
+        const instance = await claude_tokenizer.get();
+        if (!instance) throw new Error('Failed to load the Claude tokenizer');
+        return countWebTokenizerTokens(instance, messages);
+    }
+
+    if (model === 'llama3' || model === 'llama-3') {
+        const instance = await llama3_tokenizer.get();
+        if (!instance) throw new Error('Failed to load the Llama3 tokenizer');
+        return countWebTokenizerTokens(instance, messages);
+    }
+
+    if (model === 'llama') {
+        return countSentencepieceArrayTokens(spp_llama, messages);
+    }
+
+    if (model === 'mistral') {
+        return countSentencepieceArrayTokens(spp_mistral, messages);
+    }
+
+    if (model === 'yi') {
+        return countSentencepieceArrayTokens(spp_yi, messages);
+    }
+
+    if (model === 'gemma' || model === 'gemini') {
+        return countSentencepieceArrayTokens(spp_gemma, messages);
+    }
+
+    if (model === 'jamba') {
+        return countSentencepieceArrayTokens(spp_jamba, messages);
+    }
+
+    if (model === 'qwen2') {
+        const instance = await qwen2Tokenizer.get();
+        if (!instance) throw new Error('Failed to load the Qwen2 tokenizer');
+        return countWebTokenizerTokens(instance, messages);
+    }
+
+    if (model === 'command-r') {
+        const instance = await commandRTokenizer.get();
+        if (!instance) throw new Error('Failed to load the Command-R tokenizer');
+        return countWebTokenizerTokens(instance, messages);
+    }
+
+    if (model === 'command-a') {
+        const instance = await commandATokenizer.get();
+        if (!instance) throw new Error('Failed to load the Command-A tokenizer');
+        return countWebTokenizerTokens(instance, messages);
+    }
+
+    if (model === 'nemo') {
+        const instance = await nemoTokenizer.get();
+        if (!instance) throw new Error('Failed to load the Nemo tokenizer');
+        return countWebTokenizerTokens(instance, messages);
+    }
+
+    if (model === 'deepseek') {
+        const instance = await deepseekTokenizer.get();
+        if (!instance) throw new Error('Failed to load the DeepSeek tokenizer');
+        return countWebTokenizerTokens(instance, messages);
+    }
+
+    const tokensPerName = queryModel.includes('gpt-3.5-turbo-0301') ? -1 : 1;
+    const tokensPerMessage = queryModel.includes('gpt-3.5-turbo-0301') ? 4 : 3;
+    const tokensPadding = 3;
+
+    const tokenizer = getTiktokenTokenizer(model);
+
+    for (const msg of messages) {
+        try {
+            num_tokens += tokensPerMessage;
+            for (const [key, value] of Object.entries(msg)) {
+                num_tokens += tokenizer.encode(value).length;
+                if (key == 'name') {
+                    num_tokens += tokensPerName;
+                }
+            }
+        } catch {
+            console.warn('Error tokenizing message:', msg);
+        }
+    }
+    num_tokens += tokensPadding;
+
+    // NB: Since 2023-10-14, the GPT-3.5 Turbo 0301 model shoves in 7-9 extra tokens to every message.
+    // More details: https://community.openai.com/t/gpt-3-5-turbo-0301-showing-different-behavior-suddenly/431326/14
+    if (queryModel.includes('gpt-3.5-turbo-0301')) {
+        num_tokens += 9;
+    }
+
+    return num_tokens;
+}
+
 router.post('/openai/count', async function (req, res) {
     try {
         if (!req.body) return res.sendStatus(400);
 
-        let num_tokens = 0;
         const queryModel = String(req.query.model || '');
-        const model = getTokenizerModel(queryModel);
-
-        if (model === 'claude') {
-            const instance = await claude_tokenizer.get();
-            if (!instance) throw new Error('Failed to load the Claude tokenizer');
-            num_tokens = countWebTokenizerTokens(instance, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'llama3' || model === 'llama-3') {
-            const instance = await llama3_tokenizer.get();
-            if (!instance) throw new Error('Failed to load the Llama3 tokenizer');
-            num_tokens = countWebTokenizerTokens(instance, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'llama') {
-            num_tokens = await countSentencepieceArrayTokens(spp_llama, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'mistral') {
-            num_tokens = await countSentencepieceArrayTokens(spp_mistral, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'yi') {
-            num_tokens = await countSentencepieceArrayTokens(spp_yi, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'gemma' || model === 'gemini') {
-            num_tokens = await countSentencepieceArrayTokens(spp_gemma, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'jamba') {
-            num_tokens = await countSentencepieceArrayTokens(spp_jamba, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'qwen2') {
-            const instance = await qwen2Tokenizer.get();
-            if (!instance) throw new Error('Failed to load the Qwen2 tokenizer');
-            num_tokens = countWebTokenizerTokens(instance, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'command-r') {
-            const instance = await commandRTokenizer.get();
-            if (!instance) throw new Error('Failed to load the Command-R tokenizer');
-            num_tokens = countWebTokenizerTokens(instance, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'command-a') {
-            const instance = await commandATokenizer.get();
-            if (!instance) throw new Error('Failed to load the Command-A tokenizer');
-            num_tokens = countWebTokenizerTokens(instance, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'nemo') {
-            const instance = await nemoTokenizer.get();
-            if (!instance) throw new Error('Failed to load the Nemo tokenizer');
-            num_tokens = countWebTokenizerTokens(instance, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        if (model === 'deepseek') {
-            const instance = await deepseekTokenizer.get();
-            if (!instance) throw new Error('Failed to load the DeepSeek tokenizer');
-            num_tokens = countWebTokenizerTokens(instance, req.body);
-            return res.send({ 'token_count': num_tokens });
-        }
-
-        const tokensPerName = queryModel.includes('gpt-3.5-turbo-0301') ? -1 : 1;
-        const tokensPerMessage = queryModel.includes('gpt-3.5-turbo-0301') ? 4 : 3;
-        const tokensPadding = 3;
-
-        const tokenizer = getTiktokenTokenizer(model);
-
-        for (const msg of req.body) {
-            try {
-                num_tokens += tokensPerMessage;
-                for (const [key, value] of Object.entries(msg)) {
-                    num_tokens += tokenizer.encode(value).length;
-                    if (key == 'name') {
-                        num_tokens += tokensPerName;
-                    }
-                }
-            } catch {
-                console.warn('Error tokenizing message:', msg);
-            }
-        }
-        num_tokens += tokensPadding;
-
-        // NB: Since 2023-10-14, the GPT-3.5 Turbo 0301 model shoves in 7-9 extra tokens to every message.
-        // More details: https://community.openai.com/t/gpt-3-5-turbo-0301-showing-different-behavior-suddenly/431326/14
-        if (queryModel.includes('gpt-3.5-turbo-0301')) {
-            num_tokens += 9;
-        }
-
-        // not needed for cached tokenizers
-        //tokenizer.free();
-
+        const num_tokens = await countOpenAITokens(req.body, queryModel);
         res.send({ 'token_count': num_tokens });
     } catch (error) {
         console.error('An error counting tokens, using fallback estimation method', error);
@@ -1032,6 +1029,55 @@ router.post('/openai/count', async function (req, res) {
         const num_tokens = guesstimate(jsonBody);
         res.send({ 'token_count': num_tokens });
     }
+});
+
+/** 批量计数单次最多消息数。 */
+const OPENAI_BATCH_MAX_MESSAGES = 512;
+/** 批量计数单次最多文本字节数。 */
+const OPENAI_BATCH_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * 批量统计 OpenAI 风格消息。每条按“单个消息数组”精确计数，
+ * 结果与逐条调用 /openai/count 一致，仅减少网络往返。
+ */
+router.post('/openai/count-batch', async function (req, res) {
+    const body = req.body;
+    if (!body || !Array.isArray(body.messages)) {
+        return res.status(400).json({ error: 'messages 必须是数组' });
+    }
+    if (body.messages.length === 0) {
+        return res.send({ 'token_counts': [] });
+    }
+    if (body.messages.length > OPENAI_BATCH_MAX_MESSAGES) {
+        return res.status(413).json({ error: '批量消息数超过上限' });
+    }
+
+    let totalBytes = 0;
+    for (const message of body.messages) {
+        if (!message || typeof message !== 'object' || Array.isArray(message)) {
+            return res.status(400).json({ error: '每条消息必须是对象' });
+        }
+        try {
+            totalBytes += Buffer.byteLength(JSON.stringify(message));
+        } catch {
+            return res.status(400).json({ error: '消息无法序列化' });
+        }
+        if (totalBytes > OPENAI_BATCH_MAX_BYTES) {
+            return res.status(413).json({ error: '批量文本超过上限' });
+        }
+    }
+
+    const queryModel = String(req.query.model || '');
+    const token_counts = [];
+    for (const message of body.messages) {
+        try {
+            token_counts.push(await countOpenAITokens([message], queryModel));
+        } catch (error) {
+            console.error('An error counting tokens, using fallback estimation method', error);
+            token_counts.push(guesstimate(JSON.stringify([message])));
+        }
+    }
+    return res.send({ 'token_counts': token_counts });
 });
 
 router.post('/remote/kobold/count', async function (request, response) {

@@ -6,7 +6,7 @@ import storage from 'node-persist';
 import express from 'express';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 
-import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, ensureUserDirectories, toAvatarKey, getAccountVersion } from '../users.js';
+import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, ensureUserDirectories, toAvatarKey, getAccountVersion, saveUserRecord } from '../users.js';
 import { getUserRemoval } from '../user-lifecycle.js';
 import { isUserPurgeBlocked, withUserLock } from '../user-operation-state.js';
 import { SETTINGS_FILE } from '../constants.js';
@@ -33,10 +33,15 @@ router.post('/logout', (request, response) => {
 router.get('/me', async (request, response) => {
     try {
         const user = request.user.profile;
+        const avatar = await getUserAvatar(user.handle);
+        // 头像改为可缓存的独立地址，避免每次初始化都把 base64 塞进账户信息。
+        const avatarUrl = typeof avatar === 'string' && avatar.startsWith('data:')
+            ? `/api/users/me/avatar?v=${crypto.createHash('sha256').update(avatar).digest('hex').slice(0, 16)}`
+            : avatar;
         return response.set('Cache-Control', 'private, no-store').json({
             handle: user.handle,
             name: user.name,
-            avatar: await getUserAvatar(user.handle),
+            avatar: avatarUrl,
             admin: user.admin,
             password: Boolean(user.password),
             created: user.created,
@@ -44,6 +49,30 @@ router.get('/me', async (request, response) => {
         });
     } catch (error) {
         console.error('读取账号信息失败:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.get('/me/avatar', async (request, response) => {
+    try {
+        const avatar = await getUserAvatar(request.user.profile.handle);
+        const match = typeof avatar === 'string'
+            ? /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/s.exec(avatar)
+            : null;
+
+        if (!match) {
+            return response.sendStatus(404);
+        }
+
+        const buffer = Buffer.from(match[2], 'base64');
+        response.set('Content-Type', match[1]);
+        response.set('Content-Length', String(buffer.length));
+        // 地址带有头像内容哈希，可长期缓存且不会出现换头像后仍显示旧图。
+        response.set('Cache-Control', 'private, max-age=86400, immutable');
+        response.set('X-Content-Type-Options', 'nosniff');
+        return response.send(buffer);
+    } catch (error) {
+        console.error('读取账号头像失败:', error);
         return response.sendStatus(500);
     }
 });
@@ -86,7 +115,7 @@ router.post('/change-password', editAccount(async (user, request, response) => {
     const previousVersion = getAccountVersion(user);
     user.salt = newPassword ? getPasswordSalt() : '';
     user.password = newPassword ? getPasswordHash(newPassword, user.salt) : '';
-    await storage.setItem(toKey(user.handle), user);
+    await saveUserRecord(user);
     if (request.session?.handle === user.handle && request.session.version === previousVersion) {
         request.session.version = getAccountVersion(user);
     }
@@ -97,7 +126,7 @@ router.post('/change-name', editAccount(async (user, request, response) => {
     const { name } = request.body;
     if (typeof name !== 'string' || !name.trim()) return response.status(400).json({ error: '显示名无效' });
     user.name = name.trim();
-    await storage.setItem(toKey(user.handle), user);
+    await saveUserRecord(user);
     return response.sendStatus(204);
 }));
 

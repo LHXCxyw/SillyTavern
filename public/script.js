@@ -732,10 +732,9 @@ async function firstLoadInit() {
     addDOMPurifyHooks();
     reloadMarkdownProcessor();
     applyBrowserFixes();
-    await getClientVersion();
     await initSecrets();
-    await readSecretState();
-    await initLocales();
+    // 这三个请求互不依赖，并行发出可少等两个往返。
+    await Promise.all([getClientVersion(), readSecretState(), initLocales()]);
     initChatUtilities();
     initDefaultSlashCommands();
     initTextGenModels();
@@ -755,9 +754,9 @@ async function firstLoadInit() {
     initDynamicStyles();
     initTags();
     initBookmarks();
-    await getUserAvatars(true, user_avatar);
+    // 人设与背景互不依赖，先并行取回，再处理可能需要背景/人设的角色切换。
+    await Promise.all([getUserAvatars(true, user_avatar), getBackgrounds()]);
     await getCharacters();
-    await getBackgrounds();
     await initTokenizers();
     initBackgrounds();
     initAuthorsNote();

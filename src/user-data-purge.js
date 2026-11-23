@@ -9,6 +9,7 @@ import { clearDataMaidTokens } from './endpoints/data-maid.js';
 import { clearSettingsBackupTimer } from './endpoints/settings.js';
 import { clearUserStats } from './endpoints/stats.js';
 import { isUserPurgeBlocked } from './user-operation-state.js';
+import { removeAccount } from './account-store.js';
 import { removeUserBackupJobs } from './user-backup-jobs.js';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
@@ -91,5 +92,6 @@ export async function purgeUserData({ id, handle, accountId }) {
     if (sourceEntry || stagedEntry) await fs.rm(staged, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
     await storage.removeItem(toAvatarKey(handle));
     await storage.removeItem(toKey(handle));
+    removeAccount(handle);
     forgetUserDirectories(handle);
 }

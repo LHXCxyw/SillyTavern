@@ -243,6 +243,18 @@ router.post('/get', (request, response) => {
             sortFunction: sortByName(request.user.directories.openAI_Settings), removeFileExtension: true,
         });
 
+    // 首屏只返回当前启用的预设内容，其余预设由前端按需请求，
+    // 避免每次打开页面都传输数 MB 的预设文件。
+    let activeOpenaiPresetName = null;
+    try {
+        activeOpenaiPresetName = JSON.parse(settings)?.oai_settings?.preset_settings_openai ?? null;
+    } catch {
+        // 设置无法解析时保持原有行为
+    }
+    const lazyOpenaiSettings = activeOpenaiPresetName
+        ? openai_settings.map((content, index) => openai_setting_names[index] === activeOpenaiPresetName ? content : null)
+        : openai_settings;
+
     // TextGenerationWebUI Settings
     const { fileContents: textgenerationwebui_presets, fileNames: textgenerationwebui_preset_names }
         = readPresetsFromDirectory(request.user.directories.textGen_Settings, {
@@ -277,7 +289,7 @@ router.post('/get', (request, response) => {
         world_names,
         novelai_settings,
         novelai_setting_names,
-        openai_settings,
+        openai_settings: lazyOpenaiSettings,
         openai_setting_names,
         textgenerationwebui_presets,
         textgenerationwebui_preset_names,

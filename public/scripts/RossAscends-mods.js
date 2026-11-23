@@ -210,6 +210,9 @@ export async function RA_CountCharTokens() {
     let total_tokens = 0;
     let permanent_tokens = 0;
 
+    /** @type {{counter: any, input: any, isPermanent: boolean, valueHash: string, valueToCount: string}[]} */
+    const pending = [];
+
     const tokenCounters = document.querySelectorAll('[data-token-counter]');
     for (const tokenCounter of tokenCounters) {
         if (counterNonceLocal !== counterNonce) {
@@ -240,17 +243,34 @@ export async function RA_CountCharTokens() {
         } else {
             // We substitute macro for existing characters, but not for the character being created
             const valueToCount = menu_type === 'create' ? value : substituteParams(value);
-            const tokens = await getTokenCountAsync(valueToCount);
-
-            if (counterNonceLocal !== counterNonce) {
-                return;
-            }
-
-            counter.text(tokens);
-            total_tokens += tokens;
-            permanent_tokens += isPermanent ? tokens : 0;
-            input.data('last-value-hash', valueHash);
+            pending.push({ counter, input, isPermanent, valueHash, valueToCount });
         }
+    }
+
+    if (pending.length > 0) {
+        const counts = [];
+        if (main_api === 'openai') {
+            // OpenAI 计数共用一个批量接口：同一轮内并发发起才能合并成一次请求。
+            const results = await Promise.all(pending.map(item => getTokenCountAsync(item.valueToCount)));
+            counts.push(...results);
+        } else {
+            // 其它分词器保持逐个请求，避免对远端接口造成并发压力。
+            for (const item of pending) {
+                counts.push(await getTokenCountAsync(item.valueToCount));
+            }
+        }
+
+        if (counterNonceLocal !== counterNonce) {
+            return;
+        }
+
+        counts.forEach((tokens, index) => {
+            const item = pending[index];
+            item.counter.text(tokens);
+            total_tokens += tokens;
+            permanent_tokens += item.isPermanent ? tokens : 0;
+            item.input.data('last-value-hash', item.valueHash);
+        });
     }
 
     // Warn if total tokens exceeds the limit of half the max context

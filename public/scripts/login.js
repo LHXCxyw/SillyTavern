@@ -17,6 +17,21 @@ async function getCsrfToken() {
 }
 
 /**
+ * 确保已拿到 CSRF 令牌。首屏不再等待该请求，用户可能在请求返回前就点击登录。
+ * @returns {Promise<string>} CSRF token
+ */
+async function ensureCsrfToken() {
+    if (!csrfToken) {
+        try {
+            csrfToken = await getCsrfToken();
+        } catch (error) {
+            console.error('获取 CSRF 令牌失败：', error);
+        }
+    }
+    return csrfToken;
+}
+
+/**
  * Gets a list of users from the server.
  * @returns {Promise<object>} List of users
  */
@@ -50,6 +65,8 @@ async function getUserList() {
  * @returns {Promise<void>}
  */
 async function sendRecoveryPart1(handle) {
+    await ensureCsrfToken();
+
     const response = await fetch('/api/users/recover-step1', {
         method: 'POST',
         headers: {
@@ -75,6 +92,8 @@ async function sendRecoveryPart1(handle) {
  * @returns {Promise<void>}
  */
 async function sendRecoveryPart2(handle, code, newPassword) {
+    await ensureCsrfToken();
+
     const recoveryData = {
         handle,
         code,
@@ -106,6 +125,8 @@ async function sendRecoveryPart2(handle, code, newPassword) {
  * @returns {Promise<void>}
  */
 async function performLogin(handle, password) {
+    await ensureCsrfToken();
+
     const userInfo = {
         handle: handle,
         password: password,
@@ -244,6 +265,8 @@ function onCancelRecoveryClick() {
 function configureNormalLogin(userList) {
     console.log('Discreet login is disabled');
     $('#handleEntryBlock').hide();
+    $('#passwordEntryBlock').hide();
+    $('#userList').show().empty();
     $('#normalLoginPrompt').show();
     $('#discreetLoginPrompt').hide();
     console.log(userList);
@@ -292,15 +315,13 @@ function configureDiscreetLogin() {
 (async function () {
     initAccessibility();
 
-    csrfToken = await getCsrfToken();
-    const userList = await getUserList();
-
-    if (discreetLogin) {
-        configureDiscreetLogin();
-    } else {
-        configureNormalLogin(userList);
+    // 首屏优先：容器与表单先可用，CSRF 和账户列表在后台加载。
+    const popup = document.getElementById('shadow_popup');
+    if (popup) {
+        popup.style.opacity = '';
     }
-    document.getElementById('shadow_popup').style.opacity = '';
+    configureDiscreetLogin();
+
     $('#cancelRecovery').on('click', onCancelRecoveryClick);
     $(document).on('keydown', (evt) => {
         if (evt.key === 'Enter' && document.activeElement.tagName === 'INPUT') {
@@ -311,4 +332,16 @@ function configureDiscreetLogin() {
             }
         }
     });
+
+    try {
+        csrfToken = await getCsrfToken();
+        const userList = await getUserList();
+
+        // 服务端返回账户列表时切换到头像选择；隐匿登录（204/空列表）保持当前表单。
+        if (!discreetLogin && Array.isArray(userList) && userList.length > 0) {
+            configureNormalLogin(userList);
+        }
+    } catch (error) {
+        console.error('登录页初始化失败：', error);
+    }
 })();
